@@ -1,0 +1,6 @@
+Revision history for Sort-External
+
+0.01    2005-05-29 14:00:00
+        First version.  Moved from Sort::MonsterSort to Sort::External at the
+        suggestion of the PAUSE admins.
+

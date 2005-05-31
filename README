@@ -1,0 +1,21 @@
+Sort::External 0.01
+
+Use Sort::External for sorting collections which are too large to sort
+in-memory.
+
+INSTALLATION
+
+To install this module, run the following commands:
+
+    perl Makefile.PL
+    make
+    make test
+    make install
+
+
+COPYRIGHT AND LICENCE
+
+Copyright (C) 2005 Marvin Humphrey
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
