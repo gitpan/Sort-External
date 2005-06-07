@@ -36,6 +36,13 @@ $sort_output = &reverse_letter_test($sortex);
 is_deeply($sort_output, \@letters, "... with an absurdly low cache setting");
 undef $sortex;
 
+$sortex = Sort::External->new;
+$sortex->finish;
+undef $sort_output;
+$sort_output = $sortex->fetch;
+is($sort_output, undef, "Sorting nothing returns nothing");
+undef $sortex;
+
 sub reverse_letter_test {
     my $sortex_object = shift;
     $sortex_object->feed( $_ ) for @reversed_letters;

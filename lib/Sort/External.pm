@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use File::Temp 'tempdir';
 use Fcntl qw( :DEFAULT );
@@ -146,10 +146,13 @@ sub fetch {
             if defined $fh;
     }
 
-    ### Return a sorted item.  If there aren't any items left, the call
-    ### terminates, resulting in a return value of undef.
-    return shift @{ $self->{output_cache} }
-        if @{ $self->{output_cache} };
+    ### Return a sorted item, if there are any.
+    if (@{ $self->{output_cache} }) {
+        return shift @{ $self->{output_cache} };
+    }
+    else {
+        return undef;
+    }
 }
 
 ##############################################################################
@@ -187,8 +190,9 @@ sub _write_input_cache_to_tempfile {
 sub _consolidate_sortfiles {
     my $self = shift;
     my $final = shift || '';
-
-    $self->_write_input_cache_to_tempfile;
+    
+    $self->_write_input_cache_to_tempfile
+        unless $final and !@{ $self->{sortfiles}[-1] };
     
     ### Higher levels of the sortfiles array have been through more
     ### stages of consolidation.  
@@ -201,7 +205,16 @@ sub _consolidate_sortfiles {
     ### @{ $self->{sortfiles}[-1] }
     for my $input_level (0 .. $#{$self->{sortfiles} }) {
         if ($final) {
-            $self->_consolidate_one_level($input_level);
+            if (@{ $self->{sortfiles}[-1] }) {
+                $self->_consolidate_one_level($input_level);
+            }
+            else { 
+                my $input_cache = $self->{input_cache};
+                my $sortsub = $self->{sortsub};
+                @$input_cache = $self->{-sortsub} ?
+                                sort $sortsub @$input_cache : 
+                                sort @$input_cache;
+            }
         }
         elsif ( @{ $self->{sortfiles}[$input_level] } >
             $self->{max_sortfiles}) 
@@ -375,12 +388,14 @@ Sort::External - Sort huge lists
 
 =head1 VERSION
 
-0.01
+0.02
 
 =head1 WARNING
 
 This is ALPHA release software.  The interface may change.  However, it's
-simple enough that it probably won't stay in alpha very long.
+simple enough that it probably won't stay in alpha very long.  Please drop a
+line to the author if you are using it successfully -- a couple happy
+customers and we'll move from alpha to beta.
 
 =head1 SYNOPSIS
 
@@ -407,7 +422,7 @@ terminated; otherwise, make sure you terminate each one.
 
 =head2 new()
 
-    my $sortscheme = sub { $Sort::External::b <=> $Sort::External::a }';
+    my $sortscheme = sub { $Sort::External::b <=> $Sort::External::a };
     my $sortex = Sort::External->new(
         -sortsub         => $sortscheme,      # default sort: standard lexical
         -working_dir     => $temp_directory,  # default: see below
