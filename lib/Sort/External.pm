@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use File::Temp 'tempdir';
 use Fcntl qw( :DEFAULT );
@@ -63,6 +63,19 @@ sub _init_sort_external {
     $self->{sortsub} = defined $self->{-sortsub} ?
         $self->{-sortsub} : sub { $a cmp $b };
 
+    if (!defined $self->{-line_separator}) {
+        $self->{linesep} = undef;
+    }
+    elsif ($self->{-line_separator} eq 'random') {
+        my @randstringchars = (('A' .. 'Z'),('a' .. 'z'),(0 .. 9));
+        my $linesep = '';
+        $linesep .= $randstringchars[rand @randstringchars] for (1 .. 16);
+        $self->{linesep} = $linesep;
+    }
+    else {
+        $self->{linesep} = $self->{-line_separator};
+    }
+
     ### Items are stored in the input_cache until
     ### _write_input_cache_to_tempfile() is called.
     $self->{input_cache}  = [];
@@ -76,7 +89,16 @@ sub _init_sort_external {
 ##############################################################################
 sub feed {
     my $self = shift;
-    push @{ $self->{input_cache} }, @_;
+    if (defined $self->{linesep}) {
+        my $input_cache = $self->{input_cache};
+        my $linesep = $self->{linesep};
+        for (@_) {
+            push @$input_cache, "$_$linesep";
+        }
+    }
+    else {
+        push @{ $self->{input_cache} }, @_;
+    }
     return unless @{ $self->{input_cache} } >= $self->{-cache_size};
     $self->_write_input_cache_to_tempfile;
 }
@@ -128,8 +150,8 @@ sub fetch {
         last unless my $fh = $self->{sortfiles}[-1][0];
 
         seek($fh, $self->{outplaceholder}, 0);
-        local $/ = $self->{-line_separator} 
-            if defined $self->{-line_separator};
+        local $/ = $self->{linesep} 
+            if defined $self->{linesep};
         for (1 .. $self->{-cache_size}) {
             if (my $entry = (<$fh>)) {
                 push @$output_cache, $entry;
@@ -142,6 +164,7 @@ sub fetch {
                 last;
             }
         }
+        chomp @$output_cache if defined $self->{linesep};
         $self->{outplaceholder} = tell $fh 
             if defined $fh;
     }
@@ -262,7 +285,10 @@ sub _consolidate_one_level {
     push @outfiles, $outfile;
     
     my $num_filehandles = @$filehandles_to_sort;
-    my $max_lines = int($self->{-cache_size} / $num_filehandles) || 1;
+    my $max_lines = $num_filehandles ?
+                    int($self->{-cache_size} / $num_filehandles) :
+                    $self->{-cache_size};
+    $max_lines ||= 1; # testing purposes only.
 
     $in_buffers{$_} = [] for (0 .. $#$filehandles_to_sort);
     $bookmarks{$_}  = 0  for (0 .. $#$filehandles_to_sort);
@@ -319,7 +345,8 @@ sub _consolidate_one_level {
                     ### boundaries.  Put it back in the queue and skip to 
                     ### the next input_buffer.
                     if (
-                        (sort $sortsub ($line, $highest_allowed))[0] eq $highest_allowed
+                        (sort $sortsub ($line, $highest_allowed))[0] 
+                            eq $highest_allowed
                         and $line ne $highest_allowed) 
                     {
                         unshift @$input_buffer, $line;
@@ -384,13 +411,11 @@ __END__
 
 =head1 NAME
 
-Sort::External - Sort huge lists
+Sort::External - sort huge lists
 
 =head1 VERSION
 
-0.02
-
-=head1 WARNING
+0.03
 
 This is ALPHA release software.  The interface may change.  However, it's
 simple enough that it probably won't stay in alpha very long.  Please drop a
@@ -404,19 +429,66 @@ customers and we'll move from alpha to beta.
         $sortex->feed( $_ );
     }
     $sortex->finish;
-    while (my $stuff = $sortex->fetch) {
+    my $stuff;
+    while (defined($stuff = $sortex->fetch)) {
         &do_stuff_with( $stuff );
     }
 
 =head1 DESCRIPTION
 
-Use Sort::External when you have a collection which is too large to sort
-in-memory.  Most often you will feed a file to Sort::External line-by-line,
-but there's nothing to stop you from feeding it items created on the fly.
+Problem: You have a list which is too big to sort in-memory.  Solution:  Use
+Sort::External, the closest thing to a drop-in replacement for
+Perl's sort() function when dealing with unmanageably large lists.
 
-All items must be terminated, typically by whatever your system uses for line
-endings.  If you're reading from a file, they're presumably already
-terminated; otherwise, make sure you terminate each one.
+=head2 Where's the sortex() function?
+
+In a perfect world, Sort::External would export a sortex() function that you
+could swap with sort() and be done.  That isn't possible, because it would
+have to return a list which would, in all likelihood, be too large to fit in
+memory -- otherwise, why use Sort::External in the first place?  
+
+=head2 Replacing sort() with Sort::External
+
+When you replace sort() with the "feed, finish, fetch" cycle of a
+Sort::External object, there are two things to watch out for.
+
+=over
+
+=item 
+
+B<-line_separator> -- Sort::External uses temp files to cache sortable items.
+If each item is terminated by a newline/CRLF, as would be the case for lines
+from a text file, then Sort::External has no problem figuring out where items
+begin and end when reading back from disk.  If that's not the case, you need
+to set a -line_separator, as documented below. 
+
+=item 
+
+B<undef values and references> -- Perl's sort() function sorts undef values to
+the front of a list -- it will complain if you have warnings enabled, but it
+preserves their undef-ness.  sort() also preserves references.  In contrast,
+Sort::External's behavior is unpredictable and almost never desirable when you
+feed it either undef values or references.  If you really care about sorting
+lists containing undefs or refs, you'll have to symbollically replace and
+restore them yourself.
+
+=back
+
+=head2 Memory management
+
+By default, Sort::External's cache size is 10,000 items.  If your items are
+large, you may need to decrease the cache size; if they are small, you
+might improve Sort::External's performance somewhat by increasing the cache
+size. 
+
+Because Perl doesn't give you the kind of responsibility for memory management
+that C does (thank goodness), there isn't a reliable way to flush the cache
+automatically based on analyzing memory consumption that doesn't impose a
+severe penalty on performance.  If you want to max out the speed of
+Sort::External, here are two tips: 1) maximum memory usage will likely
+occur when finish() is called, and 2) don't cut things close, because there
+isn't that much to gain and there's a lot to lose if you go over the edge and 
+start hitting swap.
 
 =head1 METHODS
 
@@ -426,7 +498,7 @@ terminated; otherwise, make sure you terminate each one.
     my $sortex = Sort::External->new(
         -sortsub         => $sortscheme,      # default sort: standard lexical
         -working_dir     => $temp_directory,  # default: see below
-        -line_separator  => $special_string,  # default: $/
+        -line_separator  => 'random',         # default: $/
         -cache_size      => 100_000,          # default: 10_000;
         );
 
@@ -434,26 +506,31 @@ Construct a Sort::External object.
 
 =over
 
-=item -sortsub
+=item 
 
-A sorting subroutine.  Be advised that you MUST use $Sort::External::a and
-$Sort::External::b instead of $a and $b in your sub.  
+B<-sortsub> -- A sorting subroutine.  Be advised that you MUST use
+$Sort::External::a and $Sort::External::b instead of $a and $b in your sub.  
 
-=item -working_dir
+=item 
 
-The directory where the temporary sortfiles will reside.  By default, this
-directory is created using L<File::Temp|File::Temp>'s tempdir() command.
+B<-working_dir> -- The directory where the temporary sortfiles will reside.
+By default, this directory is created using L<File::Temp|File::Temp>'s
+tempdir() command.
 
-=item -line_separator
+=item 
 
-The delimiter which terminates every item.  See the perlvar documentation for
-$/.  
+B<-line_separator> -- By default, Sort::External assumes that your items are
+already terminated with a newline/CRLF or whatever your system considers to be
+a line ending (see the perlvar documentation for $/).  If that's not true, you
+have two options: 1) specify your own value for -line_separator (which
+Sort::External will append to each item when storing and chomp() away upon
+retrieval) or 2) specify 'random', in which case Sort::External will use a
+random 16-byte string suitable for delimiting arbitrary binary data.
 
-=item -cache_size
+=item 
 
-The size for each of Sort::External's caches, in sortable items.  Set this
-higher for faster performance, but make sure you don't set it so high that
-Perl needs to run in virtual memory.  
+B<-cache_size> -- The size for each of Sort::External's caches, in sortable
+items.  
 
 =back
 
@@ -470,13 +547,15 @@ for occasional pauses to occur as sortfiles are merged.
     ### or, if you intend to call fetch...
     $sortex->finish; 
 
-Prepare to output items in sorted order.  
+Prepare to output items in sorted order.  If you haven't yet exceeded the
+cache size, Sort::External never writes to disk -- it just sorts the items
+in-memory.
 
 If you specify the parameter -outfile, Sort::External will attempt to write
 your sorted list to that outfile (it will croak() if the file already exists).
 
 Note that you can either have finish() write to an outfile, or finish() then
-fetch()...  but not both.
+fetch()...  but not both.  
 
 =head2 fetch()
 
@@ -484,7 +563,7 @@ fetch()...  but not both.
         &do_stuff_with( $stuff );
     }
 
-Fetch the next sorted item.
+Fetch the next sorted item.  
 
 =head1 DISCUSSION
 
@@ -499,15 +578,27 @@ summarized like so:
 Cache sortable items in memory.  Every X items, sort the cache and empty it
 into a temporary sortfile.  As sortfiles accumulate, interleave them
 periodically into larger sortfiles.  Use caching extensively during the
-interleaving process to minimize disk I/O.  Complete the sort by emptying the
-input cache then interleaving the contents of all existing sortfiles into an
-output stream.
+interleaving process to minimize I/O.  Complete the sort by emptying the input
+cache then interleaving the contents of all existing sortfiles into an output
+stream.
 
 =head1 BUGS
 
 Please report any bugs or feature requests to
 C<bug-sort-external@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Sort-External>.
+
+=head1 ACKNOWLEDGEMENTS
+
+The code in Sort::External was originally developed as part of the
+L<Search::Kinosearch|Search::Kinosearch> suite.  Chris Nandor helped debug
+that early version and made some excellent suggestions which have been
+incorporated into the present distribution.
+
+=head2 SEE ALSO
+
+L<File::Sort|File::Sort>, L<File::MergeSort|File::MergeSort>, and 
+L<Sort::Merge|Sort::Merge> as possible alternatives.
 
 =head1 AUTHOR
 

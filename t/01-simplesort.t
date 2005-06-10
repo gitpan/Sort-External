@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 
-use Test::More qw( no_plan ); 
+use Test::More tests => 5; 
 use File::Spec;
 
 use lib 'lib';

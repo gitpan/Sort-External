@@ -1,4 +1,4 @@
-Sort::External 0.01
+Sort::External 0.03
 
 Use Sort::External for sorting collections which are too large to sort
 in-memory.
