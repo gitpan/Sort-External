@@ -1,5 +1,8 @@
 Revision history for Sort-External
 
+0.04    2005-06-29 15:00:00
+        Fixed 2 bugs regarding random line separator.
+
 0.03    2005-06-09 20:00:00
         Fixed 1-in-10 crashing bug.
         Added 'random' -line_separator functionality.

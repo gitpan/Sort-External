@@ -4,11 +4,13 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use File::Temp 'tempdir';
 use Fcntl qw( :DEFAULT );
 use Carp;
+
+use bytes;
 
 ### Coding convention:
 ### Public methods use hash style parameters except when to do so would cause 
@@ -35,6 +37,7 @@ my %init_defaults = (
     -working_dir            => undef,
     -line_separator         => undef,
     -cache_size             => 10_000,
+    -verbosity              => 1,
     ### The number of sortfiles at one level.  Can grow.  See further comments
     ### in _consolidate_one_level() 
     max_sortfiles           => 10,
@@ -249,6 +252,10 @@ sub _consolidate_sortfiles {
     if ($final) {
         ### re-cycle the input cache as an output cache.
         $self->{output_cache} = delete $self->{input_cache};
+        if (defined $self->{linesep}) {
+            local $/ = $self->{linesep};
+            chomp @{ $self->{output_cache} };
+        }
     }
 }
 
@@ -260,7 +267,9 @@ sub _consolidate_one_level {
     my $input_level = shift;
     
     my $sortsub = $self->{sortsub};
-    local $/ = $self->{-line_separator} if $self->{-line_separator};
+
+    local $/ = $self->{linesep} 
+        if defined $self->{linesep};
     
     ### Offload filehandles destined for consolidation onto a 
     ### lexically scoped array.  When it goes out of scope, the temp files
@@ -292,6 +301,8 @@ sub _consolidate_one_level {
 
     $in_buffers{$_} = [] for (0 .. $#$filehandles_to_sort);
     $bookmarks{$_}  = 0  for (0 .. $#$filehandles_to_sort);
+
+    my ($heldover_highest, $trouble_increment) = ('', 0);
     
     while (%in_buffers) {
         ### Read $max_lines (typically 1000) entries per input file into 
@@ -300,7 +311,7 @@ sub _consolidate_one_level {
             my $fh = $filehandles_to_sort->[$file_number];
             seek($fh, $bookmarks{$file_number}, 0);
             for (1 .. $max_lines) {
-                if (my $entry = (<$fh>)) {
+                if (defined(my $entry = (<$fh>))) {
                     push @{ $in_buffers{$file_number} }, $entry;
                 }
                 else {
@@ -315,7 +326,8 @@ sub _consolidate_one_level {
                 unless @{ $in_buffers{$file_number} };
         }
     
-        ### Get the lowest of all the last lines from the input_buffers.
+        ### Get the lowest (in sort order)  of all the last lines from 
+        ### the input_buffers.
         ### All items less than or equal to this value in sort order are 
         ### guaranteed to reside in the input_buffers, so we can safely 
         ### sort them.
@@ -327,7 +339,21 @@ sub _consolidate_one_level {
                            (sort $sortsub @high_candidates) :
                            (sort @high_candidates); 
         my $highest_allowed = $high_candidates[0];
-        
+        if (defined $highest_allowed and $heldover_highest eq $highest_allowed) {
+            $trouble_increment += 1;
+            if ($trouble_increment > 1000 and $self->{-verbosity}) {
+                warn ("We may be stuck in an infinite loop, since we have " .
+                    "seen the same record at least 1000 and probably " .
+                    "several billion times.  This probably means that " .
+                    "we are seeing the latter portion of a record fed to " .
+                    "Sort::External which contained the record separator " .
+                    "embedded within it. [To suppress this warning, set " . 
+                    "-verbosity to 0.] The record in question is: " .
+                    "$highest_allowed");
+                $trouble_increment= 0;
+            }
+        }
+        $heldover_highest = $highest_allowed;
         ### To conserve memory, reuse the array assigned to the input 
         ### cache (which is currently empty) as a holder for this batch of 
         ### sortable items.
@@ -415,7 +441,7 @@ Sort::External - sort huge lists
 
 =head1 VERSION
 
-0.03
+0.04
 
 This is ALPHA release software.  The interface may change.  However, it's
 simple enough that it probably won't stay in alpha very long.  Please drop a
