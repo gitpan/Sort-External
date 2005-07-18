@@ -1,25 +1,40 @@
 use strict;
 use warnings;
 
-use Test::More tests => 1; 
+use Test::More tests => 2; 
 use File::Spec;
 
 use lib 'lib';
 use Sort::External;
 
-my @stuff = map { pack('n', (11_000 - $_)) } ( 0 .. 11_000 );
+my ($sortex, $item, @sorted);
 
-my $sortex = Sort::External->new(
+my @orig = map { sprintf("%05d", $_) } ( 0 .. 11_000);
+unshift @orig, '';
+my @reversed = reverse @orig;
+
+$sortex = Sort::External->new(
     -cache_size => 1_000,
     -line_separator => 'random',
     );
-$sortex->feed(@stuff);
+$sortex->feed(@reversed);
 $sortex->finish;
-@stuff = reverse @stuff;
-my $item;
-my @sorted;
 while (defined($item = $sortex->fetch)) {
     push @sorted, $item;
 }
-is_deeply(\@sorted, \@stuff, "Sorting binary items with random linesep...");
+is_deeply(\@sorted, \@orig, "Sorting binary items with random linesep...");
+use Data::Dumper;
+undef $sortex;
+@sorted = ();
 
+my $linesep = 'hgfedcbxaabcdefgh';
+$sortex = Sort::External->new(
+    -cache_size => 1_000,
+    -line_separator => $linesep,
+    );
+$sortex->feed(@reversed);
+$sortex->finish;
+while (defined($item = $sortex->fetch)) {
+    push @sorted, $item;
+}
+is_deeply(\@sorted, \@orig, "Sorting binary items with custom linesep...");

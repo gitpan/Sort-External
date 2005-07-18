@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use File::Temp 'tempdir';
 use Fcntl qw( :DEFAULT );
@@ -63,9 +63,6 @@ sub _init_sort_external {
         $self->{workdir} = tempdir( CLEANUP => 1 ); 
     }
     
-    $self->{sortsub} = defined $self->{-sortsub} ?
-        $self->{-sortsub} : sub { $a cmp $b };
-
     if (!defined $self->{-line_separator}) {
         $self->{linesep} = undef;
     }
@@ -92,16 +89,7 @@ sub _init_sort_external {
 ##############################################################################
 sub feed {
     my $self = shift;
-    if (defined $self->{linesep}) {
-        my $input_cache = $self->{input_cache};
-        my $linesep = $self->{linesep};
-        for (@_) {
-            push @$input_cache, "$_$linesep";
-        }
-    }
-    else {
-        push @{ $self->{input_cache} }, @_;
-    }
+    push @{ $self->{input_cache} }, @_;
     return unless @{ $self->{input_cache} } >= $self->{-cache_size};
     $self->_write_input_cache_to_tempfile;
 }
@@ -130,9 +118,14 @@ sub finish {
         }
         sysopen(OUTFILE, $args{-outfile}, O_CREAT | O_EXCL | O_WRONLY )
             or croak ("Couldn't open outfile '$args{-outfile}': $!");
-        for my $source_fh (@{ $self->{sortfiles}[-1] }) {
-            while (<$source_fh>) {
-                print OUTFILE 
+        print OUTFILE for @{ $self->{output_cache} };
+        for my $fh (@{ $self->{sortfiles}[-1] }) {
+            seek ($fh, 0, 0);
+            local $/ = $self->{linesep} 
+                if defined $self->{linesep};
+            my $entry;
+            while (defined($entry = (<$fh>))) {
+                print OUTFILE $entry
                     or croak("Couldn't print to '$args{-outfile}': $!");
             }
         }
@@ -186,25 +179,34 @@ sub fetch {
 ##############################################################################
 sub _write_input_cache_to_tempfile {
     my $self = shift;
-    return unless @{ $self->{input_cache} };
+    my $input_cache = $self->{input_cache};
+    my $sortsub = $self->{-sortsub};
+    my $linesep = $self->{linesep};
+
+    return unless @$input_cache;
     my $tmp = File::Temp->new(
         DIR => $self->{workdir},
         UNLINK => 1,
     );  
     push @{ $self->{sortfiles}[0] }, $tmp;
-    if ($self->{-sortsub}) {
-        my $sortsub = $self->{sortsub};
-        for (sort $sortsub @{ $self->{input_cache} }) {
-            print $tmp $_
+
+    @$input_cache = defined $sortsub ?
+                    (sort $sortsub @$input_cache) :
+                    (sort @$input_cache);
+
+    if (defined $linesep) {
+        for (@$input_cache) {
+            print $tmp "$_$linesep"
                 or croak("Print to $tmp failed: $!");
         }
     }
     else {
-        for (sort @{ $self->{input_cache} }) {
+        for (@$input_cache) {
             print $tmp $_
                 or croak("Print to $tmp failed: $!");
         }
     }
+    
     $self->{input_cache} = [];
     $self->_consolidate_sortfiles
         if @{ $self->{sortfiles}[0] } >= 10;
@@ -236,8 +238,12 @@ sub _consolidate_sortfiles {
             }
             else { 
                 my $input_cache = $self->{input_cache};
-                my $sortsub = $self->{sortsub};
-                @$input_cache = $self->{-sortsub} ?
+                my $sortsub = $self->{-sortsub};
+                if (defined $self->{linesep}) {
+                    local $/ = $self->{linesep};
+                    chomp @$input_cache;
+                }
+                @$input_cache = $sortsub ?
                                 sort $sortsub @$input_cache : 
                                 sort @$input_cache;
             }
@@ -266,10 +272,11 @@ sub _consolidate_one_level {
     my $self = shift;
     my $input_level = shift;
     
-    my $sortsub = $self->{sortsub};
+    my $sortsub = $self->{-sortsub};
+    my $linesep = $self->{linesep};
 
-    local $/ = $self->{linesep} 
-        if defined $self->{linesep};
+    local $/ = $linesep 
+        if defined $linesep;
     
     ### Offload filehandles destined for consolidation onto a 
     ### lexically scoped array.  When it goes out of scope, the temp files
@@ -319,6 +326,9 @@ sub _consolidate_one_level {
                 }
             }
             $bookmarks{$file_number} = tell $fh;
+            if (defined $linesep) {
+                chomp @{ $in_buffers{$file_number} };
+            }
             ### We've attempted to fill the buffer.
             ### If there's nothing in the buffer, we've exhausted the source
             ### file, so make the buffer go away. 
@@ -335,7 +345,7 @@ sub _consolidate_one_level {
         for (values %in_buffers) {
             push @high_candidates, $_->[-1] if defined $_->[-1];
         }
-        @high_candidates = $self->{-sortsub} ?
+        @high_candidates = $sortsub ?
                            (sort $sortsub @high_candidates) :
                            (sort @high_candidates); 
         my $highest_allowed = $high_candidates[0];
@@ -364,7 +374,7 @@ sub _consolidate_one_level {
         ### the buffer. 
         ### Note: The only difference between these two blocks is the
         ### performance-killing conditional in the first.
-        if ($self->{-sortsub}) {
+        if ($sortsub) {
             foreach my $input_buffer (values %in_buffers) {
                 LINE: while (my $line = shift @$input_buffer) {
                     ### If true, the item lies outside of the allowable
@@ -384,8 +394,9 @@ sub _consolidate_one_level {
         }
         else {
             foreach my $input_buffer (values %in_buffers) {
-                LINE: while (my $line = shift @$input_buffer) {
-                    if ($line gt $highest_allowed) {
+                my $line;
+                LINE: while (defined ($line = shift @$input_buffer)) {
+                    if ($line gt $highest_allowed and $highest_allowed) {
                         unshift @$input_buffer, $line;
                         last LINE;
                     }
@@ -394,10 +405,16 @@ sub _consolidate_one_level {
             }
         }
         
-        @$batch = $self->{-sortsub} ? 
+        @$batch = $sortsub ? 
                  (sort $sortsub @$batch) :
                  (sort @$batch);
-        my $write_buffer = join '', @$batch;
+        my $write_buffer = '';
+        if (defined $linesep and @$batch) {
+           $write_buffer = (join $linesep, @$batch) .  $linesep;
+        }
+        else {
+            $write_buffer = join '', @$batch;
+        }
         @$batch = ();
         
         ### Start a new outfile if writing the contents of the buffer to the
@@ -441,12 +458,7 @@ Sort::External - sort huge lists
 
 =head1 VERSION
 
-0.04
-
-This is ALPHA release software.  The interface may change.  However, it's
-simple enough that it probably won't stay in alpha very long.  Please drop a
-line to the author if you are using it successfully -- a couple happy
-customers and we'll move from alpha to beta.
+0.05
 
 =head1 SYNOPSIS
 
