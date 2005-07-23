@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.10_1';
+our $VERSION = '0.10_2';
 
 use File::Temp 'tempdir';
 use Devel::Size 'size';
@@ -413,9 +413,8 @@ Sort::External - sort huge lists
         $sortex->feed( $_ );
     }
     $sortex->finish;
-    my $stuff;
-    while (defined($stuff = $sortex->fetch)) {
-        &do_stuff_with( $stuff );
+    while (defined($_ = $sortex->fetch)) {
+        &do_stuff_with( $_ );
     }
 
 =head1 DESCRIPTION
@@ -559,8 +558,8 @@ but not both.
 
 =head2 fetch()
 
-    while (my $stuff = $sortex->fetch) {
-        &do_stuff_with( $stuff );
+    while (defined ($_ = $sortex->fetch)) {
+        &do_stuff_with( $_ );
     }
 
 Fetch the next sorted item.  

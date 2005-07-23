@@ -14,55 +14,42 @@ Sort::External::Cookbook - sort huge lists efficiently
 
 Sort::External has a special affinity for the packed-default sort, which first
 came to the author's attention via a paper by Uri Guttman and Larry Rosler:
-L<http://www.sysarch.com/perl/sort_paper.html|A Fresh Look at Efficient Perl
-Sorting>.
+L<A Fresh Look at Efficient Perl
+Sorting|http://www.sysarch.com/perl/sort_paper.html>.
 
 For most applications, the packed-default is the most efficient Perl sorting
-transform.  This document explores how to document explains how to apply it to
-solve common coding problems.
+transform.  This document explores how to apply it to solve common coding
+problems.
 
-Most of the material herein can also be applied for building a packed-default
+Most of the material herein is also applicable to building a packed-default
 sort with Perl's built-in sort() function.
 
 =head1 The Packed-Default Sort 
 
-=head2 Simplify the sortsub!
+=head2 Eliminate the sortsub!
 
 Perl's sortsubs are extremely flexible and powerful, but they are also
-computationally expensive.  If you can distill the sortsub down to one of 4
-simple configurations, major optimizations kick in as Perl decides that it can
-perform the sort at the C level without leaving to execute Perl code.  The
-four simple sortsubs are:
+computationally expensive.  If you can eliminate the sortsub entirely from
+your algo, major optimizations kick in as Perl decides that it can
+perform the whole sort at the C level without leaving to execute Perl code.  
 
-    @out = sort { $a cmp $b } @in; # ascending lexical
-    @out = sort { $b cmp $a } @in; # descending lexical
-    @out = sort { $a <=> $b } @in; # ascending numeric
-    @out = sort { $b <=> $a } @in; # descending numeric
-
-The first sortsub is equivalent to specifying no sortsub at all:
-
-    @out = sort { $a cmp $b } @in;
-    @out = sort @in; # same thing.
-
-For various reasons, Sort::External really, really likes this default
-ascending lexical sort.  If you are chasing efficiency, you should do
-everything you can to avoid supplying Sort::External with a sortsub.
-
-Packing sortkeys:
+Like Perl's native sort() function, Sort::External really, really likes to use
+the default ascending lexical sort.  If you are chasing efficiency, you should
+do everything you can to avoid supplying Sort::External with a sortsub.
 
 =head2 Encode, sort, decode.
 
-The standard technique for sorting a hash by value is to use a sortsub:
+The standard technique for sorting a hash by value in Perl is to use a sortsub:
 
     my %colors = (
-        "Granny Smith"  => "green",
-        "Red Delicious" => "red",
-        "Pink Lady"     => "pink",
+        "Granny Smith"     => "green",
+        "Golden Delicious" => "yellow",
+        "Pink Lady"        => "pink",
         );
     my @sorted_by_color = sort { $colors{$a} cmp $colors{$b} } keys %colors;
     
     ### Result:
-    ### @sorted_by_color = ("Granny Smith", "Pink Lady", "Red Delicious");
+    ### @sorted_by_color = ("Granny Smith", "Pink Lady", "Golden Delicious");
 
 To accomplish the same goal using a packed-default sort, we use a three-step
 process:
@@ -70,12 +57,12 @@ process:
     ### 1. Encode
     my @sortkeys;
     while (my ($variety, $color) = each %colors) {
-        push @sortkeys, sprintf("%-5s%-13s", $color, $variety);
+        push @sortkeys, sprintf("%-6s%-16s", $color, $variety);
     }
     ### @sortkeys = (
-    ###     "greenGranny Smith ",
-    ###     "red  Red Delicious",
-    ###     "pink Pink Lady    ",
+    ###     "green Granny Smith    ",
+    ###     "yellowGolden Delicious",
+    ###     "pink  Pink Lady       ",
     ###     );
     
     ### 2. Sort
@@ -89,7 +76,7 @@ Using Sort::External, steps 2 and 3 are modified:
     ### 1. Encode
     my @sortkeys;
     while (my ($variety, $color) = each %colors) {
-        push @sortkeys, sprintf("%-5s%-13s", $color, $variety);
+        push @sortkeys, sprintf("%-6s%-16s", $color, $variety);
     }
     
     ### 2. Sort
@@ -111,30 +98,30 @@ of our examples.
 =head2 sprintf
 
 The sprintf technique for encoding sortkeys is the most straightforward and
-flexible.  In addition to lexical sorting of text data, it can be used to
-put numerical data into a string form where the lexical sort doubles as a
-numerical sort.
+flexible.  In addition to preparing multi-field text data for a lexical sort,
+it can be used to put numerical data into a string form where the lexical sort
+doubles as a numerical sort.
 
     my %prices = (
-        "Granny Smith"  => 1.69,
-        "Pink Lady"     => 1.99,
-        "Red Delicious" =>  .79, # on sale!
+        "Granny Smith"     => 1.69,
+        "Pink Lady"        => 1.99,
+        "Golden Delicious" =>  .79, # on sale!
         );
     my @sortkeys;
     while (my ($variety, $price) = each %prices) {
-        push @sortkeys, sprintf("%1.2f%-13s", $color, $variety);
+        push @sortkeys, sprintf("%1.2f%-16s", $price, $variety);
     }
     ### @sortkeys = (
-    ###     "1.69Granny Smith ",
-    ###     "0.79Red Delicious",
-    ###     "1.99Pink Lady    ",
+    ###     "1.69Granny Smith    ",
+    ###     "0.79Golden Delicious",
+    ###     "1.99Pink Lady       ",
     ###     );
 
 There are two potential problems with the sprintf technique.  
 
-First, you must know the maximum width of all potential fields in advance.  If
-you don't, you'll have to run through your data in a wasteful
-"characterization pass", solely for the purpose of measuring field widths.
+First, you must know the maximum width of all fields in advance.  If you
+don't, you'll have to run through your data in a wasteful "characterization
+pass" solely for the purpose of measuring field widths.
 
 Second, if the fields have a long maximum width but the content is sparse,
 sprintf-generated sortkeys take up a lot of unnecessary space.  With
@@ -162,14 +149,14 @@ fixed-width strings, it can also encode positive integers into a
 sortable form. The four integer pack formats which sort correctly are:
     
     ### c => signed char           maximum value 127
-    ### C => unsigned char_        maximum value 255
-    ### n => 16-bit network short_ maximum value 32_767
-    ### N => 32-bit network long_  maximum value 2_147_483_647
+    ### C => unsigned char         maximum value 255
+    ### n => 16-bit network short  maximum value 32_767
+    ### N => 32-bit network long   maximum value 2_147_483_647
     
     my %first_introduced = (
-        "Granny Smith"  => 1868,
-        "Pink Lady"     => 1970,
-        "Red Delicious" => 1870,
+        "Granny Smith"     => 1868,
+        "Pink Lady"        => 1970,
+        "Golden Delicious" => 1890,
         );
     while (my ($variety, $year) = each %first_introduced) {
         push @sortkeys, (pack('n', $year) . $variety);
@@ -196,20 +183,20 @@ It is often the case that a combination of techniques yields the most
 efficient sortkey encoding and decoding.  Here is a contrived example:
 
     my %apple_stats = (
-        "Granny Smith" => {
+        "Granny Smith"     => {
                 color => "green", 
                 price => 1.69, 
                 year  => 1868,
             },
-        "Pink Lady"    => {
+        "Pink Lady"        => {
                 color => "pink",
                 price => 1.99, 
                 year  => 1970,
             },
-        "Red Delicious" => {
-                color => "red",
+        "Golden Delicious" => {
+                color => "yellow",
                 price =>  .79, 
-                year  => 1870,
+                year  => 1890,
             },
         );
     my @sortkeys;
@@ -227,18 +214,18 @@ efficient sortkey encoding and decoding.  Here is a contrived example:
 sprintf would be a much better choice in this particular case, since it makes
 it easier to recover the all the fields using unpack:
     
-    while (my $variety, $stats) = each %apple_stats) {
+    while (my ($variety, $stats) = each %apple_stats) {
         push @sortkeys, (
-            sprintf("%-5s%1.2f%04d%-15s", 
+            sprintf("%-6s%1.2f%04d%-16s", 
                 @{ $stats }{'color','price','year'}, $variety
             );
     }
     my @sorted = sort @sortkeys;
     for (@sorted) {
-        my %result; 
-        @result{'color','price','year','variety'} 
-            = unpack('a5 a4 a4 a15', $_);
-        $_ = { $result{variety} => \%result };
+        my (%result, $variety); 
+        (@result{'color','price','year'}, $variety) 
+            = unpack('a6 a4 a4 a16', $_);
+        $_ = { $variety => \%result };
     }
 
 =head1 Extended sorting techniques
@@ -249,7 +236,7 @@ You can reverse the order of a lexical sort by flipping all the bits on your
 sortkeys.
 
     while (my ($variety, $color) = each %colors) {
-        push @sortkeys, sprintf("%-5s%-13s", $color, $variety);
+        push @sortkeys, sprintf("%-6s%-16s", $color, $variety);
     }
     @sortkeys = map { ~ $_ } @sortkeys;
     my @sorted = sort @sortkeys;
@@ -265,18 +252,18 @@ Multi-field packed-default sorts are usually as straightforward as
 concatenating the fields using either sprintf or null-termination.  However,
 if you need I<both> ascending and descending sub-sorts within the same sort,
 special care is required.  Null-termination is generally not an option,
-because bit-flipped fields may contain nulls.
+because bit-flipped fields may contain null bytes.
 
-    ### sort varieties by:
+    ### sort by:
     ###     color descending,
     ###     price ascending,
     ###     year  descending
     while (my $variety, $stats) = each %apple_stats) {
         push @sortkeys, (
-                (~ sprintf("%-5s", stats->{color}) ) .
+                (~ sprintf("%-6s", stats->{color}) ) .
                 sprintf("%1.2f", $stats->{price}) .
-                (~ sprintf("04d", stats->{year}) ) .
-                sprintf("%-13s", $variety);
+                (~ sprintf("%04d", stats->{year}) ) .
+                sprintf("%-16s", $variety);
             );
     }
     my @sorted = sort @sortkeys;
@@ -293,22 +280,23 @@ sort.  The only way to avoid a sortsub is to double-encode:
     my @sorted = sort @sortkeys;
     @sorted = map { s/.*?\0\0//; $_ } @sorted;
     ### @sorted = ( 
+    ###     "Golden Delicious",
     ###     "Granny Smith",
     ###     "green",
     ###     "pink",
     ###     "Pink Lady",
-    ###     "red",
-    ###     "Red Delicious",
+    ###     "yellow",
+    ###     );
 
 =head2 A challenge
 
-Ken Clarke has identified a case where there is no elegant packed-default sort
-solution:
+Ken Clarke has identified a case where there seems to be no elegant
+packed-default sort solution:
 
-    Each row contains multiple fields
-    AND is impossible to know the field lengths in advance
-    AND there are both ascending and descending subsorts
-    AND (the sort must be (case-insensitive AND case-preserving))
+    ### Each row contains multiple fields
+    ### AND is impossible to know the field lengths in advance
+    ### AND there are both ascending and descending subsorts
+    ### AND (the sort must be (case-insensitive AND case-preserving))
 
 There doesn't appear to be a way to perform this sort without a
 characterization pass.
