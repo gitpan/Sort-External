@@ -1,5 +1,10 @@
 Revision history for Sort-External
 
+0.10    In development
+        Implemented -mem_threshold, which required extensive rewrites to
+            several subs.
+        implemented -flags parameter to finish().
+
 0.05    2005-07-17 19:00:00
         Fixed bug with empty -sortfile when no tempfiles were needed.
         Fixed bug sorting empty strings with -line_separator specified.

@@ -4,9 +4,10 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.05';
+our $VERSION = '0.10_1';
 
 use File::Temp 'tempdir';
+use Devel::Size 'size';
 use Fcntl qw( :DEFAULT );
 use Carp;
 
@@ -37,12 +38,15 @@ my %init_defaults = (
     -working_dir            => undef,
     -line_separator         => undef,
     -cache_size             => 10_000,
+    -mem_threshold          => 0, 
     -verbosity              => 1,
     ### The number of sortfiles at one level.  Can grow.  See further comments
     ### in _consolidate_one_level() 
     max_sortfiles           => 10,
     ### Keep track of position when reading back from tempfiles.
     outplaceholder          => 0,
+    mem_bytes               => 0,
+    out_fh                  => undef,
     );
 
 ##############################################################################
@@ -76,9 +80,9 @@ sub _init_sort_external {
         $self->{linesep} = $self->{-line_separator};
     }
 
-    ### Items are stored in the input_cache until
-    ### _write_input_cache_to_tempfile() is called.
-    $self->{input_cache}  = [];
+    ### Items are stored in the item_cache until
+    ### _write_item_cache_to_tempfile() is called.
+    $self->{item_cache}  = [];
     ### A place for tempfile filehandles to accumulate. 
     $self->{sortfiles}    = [];
     $self->{sortfiles}[0] = [];
@@ -89,13 +93,25 @@ sub _init_sort_external {
 ##############################################################################
 sub feed {
     my $self = shift;
-    push @{ $self->{input_cache} }, @_;
-    return unless @{ $self->{input_cache} } >= $self->{-cache_size};
-    $self->_write_input_cache_to_tempfile;
+    if ($self->{-mem_threshold}) {
+        my $item_cache = $self->{item_cache};
+        my $threshold = $self->{-mem_threshold};
+        for (@_) {
+            push @$item_cache, $_;
+            $self->{mem_bytes} += size($item_cache->[-1]);
+            $self->_write_item_cache_to_tempfile
+                if ($self->{mem_bytes} > $threshold);
+        }
+        return;
+    }
+    push @{ $self->{item_cache} }, @_;
+    return unless @{ $self->{item_cache} } >= $self->{-cache_size};
+    $self->_write_item_cache_to_tempfile;
 }
 
 my %finish_defaults = (
-    -outfile => 'sorted.txt',
+    -outfile => undef,
+    -flags   => (O_CREAT | O_EXCL | O_WRONLY),
     );
 
 ##############################################################################
@@ -109,16 +125,17 @@ sub finish {
     ### If called with arguments, we must be printing everything to an
     ### outfile.
     if (@_) {
-        my %args;
+        my %args = %finish_defaults;
         while (@_) {
             my ($var, $val) = (shift, shift);
             croak("Illegal parameter: '$var'") 
                 unless exists $finish_defaults{$var};
             $args{$var} = $val;
         }
-        sysopen(OUTFILE, $args{-outfile}, O_CREAT | O_EXCL | O_WRONLY )
+        croak('Argument -outfile is required') unless defined $args{-outfile};
+        sysopen(OUTFILE, $args{-outfile}, $args{-flags})
             or croak ("Couldn't open outfile '$args{-outfile}': $!");
-        print OUTFILE for @{ $self->{output_cache} };
+        print OUTFILE for @{ $self->{item_cache} };
         for my $fh (@{ $self->{sortfiles}[-1] }) {
             seek ($fh, 0, 0);
             local $/ = $self->{linesep} 
@@ -138,36 +155,26 @@ sub finish {
 ##############################################################################
 sub fetch {
     my $self = shift;
-    
-    ### While there's nothing in the output buffer...
-    while (!@{ $self->{output_cache} }) {
-        my $output_cache = $self->{output_cache};
-        ### Eject from the loop if there aren't any more sortfiles.
-        last unless my $fh = $self->{sortfiles}[-1][0];
-
-        seek($fh, $self->{outplaceholder}, 0);
-        local $/ = $self->{linesep} 
-            if defined $self->{linesep};
-        for (1 .. $self->{-cache_size}) {
-            if (my $entry = (<$fh>)) {
-                push @$output_cache, $entry;
-            }
-            else {
-                close $fh or croak("Couldn't close file '$fh': $!");
-                shift @{ $self->{sortfiles}[-1] };
-                $self->{outplaceholder} = 0;
-                undef $fh;
-                last;
-            }
-        }
-        chomp @$output_cache if defined $self->{linesep};
-        $self->{outplaceholder} = tell $fh 
-            if defined $fh;
+    my $out_fh = $self->{out_fh};
+    if (@{ $self->{item_cache} }) {
+        return shift @{ $self->{item_cache} };
     }
-
-    ### Return a sorted item, if there are any.
-    if (@{ $self->{output_cache} }) {
-        return shift @{ $self->{output_cache} };
+    elsif ($out_fh and $self->{linesep}) {
+        local $/ = $self->{linesep};
+        while (<$out_fh>) {
+            chomp;
+            return $_;
+        }
+    }
+    elsif ($out_fh) {
+        while (<$out_fh>) {
+            return $_;
+        }
+    }
+    if ($self->{out_fh} = shift @{ $self->{sortfiles}[-1] }) {
+        $out_fh = $self->{out_fh};
+        seek($out_fh, 0, 0);
+        return $self->fetch;
     }
     else {
         return undef;
@@ -177,37 +184,38 @@ sub fetch {
 ##############################################################################
 ### Flush the items in the input cache to a tempfile, sorting as we go.
 ##############################################################################
-sub _write_input_cache_to_tempfile {
+sub _write_item_cache_to_tempfile {
     my $self = shift;
-    my $input_cache = $self->{input_cache};
+    my $item_cache = $self->{item_cache};
     my $sortsub = $self->{-sortsub};
     my $linesep = $self->{linesep};
 
-    return unless @$input_cache;
+    return unless @$item_cache;
     my $tmp = File::Temp->new(
         DIR => $self->{workdir},
         UNLINK => 1,
     );  
     push @{ $self->{sortfiles}[0] }, $tmp;
 
-    @$input_cache = defined $sortsub ?
-                    (sort $sortsub @$input_cache) :
-                    (sort @$input_cache);
+    @$item_cache = defined $sortsub ?
+                   (sort $sortsub @$item_cache) :
+                   (sort @$item_cache);
 
     if (defined $linesep) {
-        for (@$input_cache) {
+        for (@$item_cache) {
             print $tmp "$_$linesep"
                 or croak("Print to $tmp failed: $!");
         }
     }
     else {
-        for (@$input_cache) {
+        for (@$item_cache) {
             print $tmp $_
                 or croak("Print to $tmp failed: $!");
         }
     }
     
-    $self->{input_cache} = [];
+    $self->{mem_bytes} = 0;
+    $self->{item_cache} = [];
     $self->_consolidate_sortfiles
         if @{ $self->{sortfiles}[0] } >= 10;
 }       
@@ -219,7 +227,7 @@ sub _consolidate_sortfiles {
     my $self = shift;
     my $final = shift || '';
     
-    $self->_write_input_cache_to_tempfile
+    $self->_write_item_cache_to_tempfile
         unless $final and !@{ $self->{sortfiles}[-1] };
     
     ### Higher levels of the sortfiles array have been through more
@@ -237,15 +245,15 @@ sub _consolidate_sortfiles {
                 $self->_consolidate_one_level($input_level);
             }
             else { 
-                my $input_cache = $self->{input_cache};
+                my $item_cache = $self->{item_cache};
                 my $sortsub = $self->{-sortsub};
                 if (defined $self->{linesep}) {
                     local $/ = $self->{linesep};
-                    chomp @$input_cache;
+                    chomp @$item_cache;
                 }
-                @$input_cache = $sortsub ?
-                                sort $sortsub @$input_cache : 
-                                sort @$input_cache;
+                @$item_cache = $sortsub ?
+                               sort $sortsub @$item_cache : 
+                               sort @$item_cache;
             }
         }
         elsif ( @{ $self->{sortfiles}[$input_level] } >
@@ -255,13 +263,9 @@ sub _consolidate_sortfiles {
         }
     }
     
-    if ($final) {
-        ### re-cycle the input cache as an output cache.
-        $self->{output_cache} = delete $self->{input_cache};
-        if (defined $self->{linesep}) {
-            local $/ = $self->{linesep};
-            chomp @{ $self->{output_cache} };
-        }
+    if ($final and defined $self->{linesep}) {
+        local $/ = $self->{linesep};
+        chomp @{ $self->{item_cache} };
     }
 }
 
@@ -278,20 +282,54 @@ sub _consolidate_one_level {
     local $/ = $linesep 
         if defined $linesep;
     
-    ### Offload filehandles destined for consolidation onto a 
-    ### lexically scoped array.  When it goes out of scope, the temp files
-    ### are supposed to delete themselves (but don't, for some reason, so we
-    ### close them explicitly).
-    my $filehandles_to_sort = $self->{sortfiles}[$input_level];
-    $self->{sortfiles}[$input_level] = [];
-    
-    ### Create a holder for the output filehandles if necessary.
-    if (!defined $self->{sortfiles}[$input_level + 1]) {
-        $self->{sortfiles}[$input_level + 1] = [];
+    ### Build an array of buffers.  
+    ### 
+    ### Each buffer is scalar blessed into its own unique package.
+    ### The filehandle used to refill the scalar is stored in the
+    ### next_line() closure within that package.
+    ### next_line() sets the value of the blessed scalar, returning undef if
+    ### the filehandle has exhausted itself.
+    ### 
+    ### The rationale behind this somewhat esoteric technique: as few
+    ### dereference ops as possible.
+    my @in_buffers;
+    my $num_packages = 0;
+    for my $tf_handle (@{ $self->{sortfiles}[$input_level] }) {
+        seek($tf_handle, 0, 0);
+        my $holder;
+        my $packagename = "Sort::External::Buffer$num_packages";
+        my $buff = bless \$holder, $packagename; 
+        no strict 'refs';
+        no warnings 'redefine';
+        $num_packages++;
+        *{ $packagename . "::next_line" } = defined $linesep ?
+            sub { 
+                return unless defined(${ $_[0] } = <$tf_handle>); 
+                chomp $_[0]; 
+                } :
+            sub { 
+                return unless defined(${ $_[0] } = <$tf_handle>); 
+                };
+        next unless defined $buff->next_line;
+        
+        my $place = 0;    
+        if (defined $sortsub) {
+            for my $prev_buff (@in_buffers) {
+                last unless (sort $sortsub($$buff, $prev_buff))[0] eq $$buff;
+                $place++;
+            }
+        }
+        else {
+            for my $prev_buff (@in_buffers) {
+                last unless $$buff gt $$prev_buff;
+                $place++;
+            }
+        }
+        splice(@in_buffers, $place, 0, $buff);
     }
-    
-    my %in_buffers;
-    my %bookmarks;
+    ### Create a holder for the output filehandles if necessary.
+    $self->{sortfiles}[$input_level + 1] ||= [];
+
     my @outfiles;
     ### Get a new outfile
     my $outfile = File::Temp->new(
@@ -300,143 +338,45 @@ sub _consolidate_one_level {
         );
     push @outfiles, $outfile;
     
-    my $num_filehandles = @$filehandles_to_sort;
-    my $max_lines = $num_filehandles ?
-                    int($self->{-cache_size} / $num_filehandles) :
-                    $self->{-cache_size};
-    $max_lines ||= 1; # testing purposes only.
+    my $outfile_length = 0;
+    my $bubblebuff_code = <<'EOSTUFF';
+        BUBBLEBUFF: while (@in_buffers) {
+            my $bubblebuff = shift @in_buffers;
+            $outfile_length += bytes::length($$bubblebuff);
+            if ($outfile_length > MAX_FS) {
+                undef $outfile;
+                $outfile = File::Temp->new(
+                    DIR => $self->{workdir},
+                    UNLINK  => 1
+                    );
+                push @outfiles, $outfile;
+                $outfile_length = bytes::length($$bubblebuff);
+            }
+            print $outfile $$bubblebuff;
+            ### If the filehandle filling this buffer has been exhausted,
+            ### remove the buffer from the array.
+            next BUBBLEBUFF unless defined $bubblebuff->next_line;
+            my $place = 0;    
+            ### bubblesort the buffer to the proper place in the queue.
+            for my $buff (@in_buffers) {
+EOSTUFF
+    $bubblebuff_code .= $sortsub ?
+                q#last unless (sort $sortsub ($$buff, $$bubblebuff))[0] 
+                        eq $$bubblebuff;# :
+                q#last unless $$buff lt $$bubblebuff;#;
+    $bubblebuff_code .= <<'EOSTUFF';
+                $place++;
+            }
+            splice(@in_buffers, $place, 0, $bubblebuff);
+        }
+EOSTUFF
+    eval $bubblebuff_code;
+    die $@ if $@;
 
-    $in_buffers{$_} = [] for (0 .. $#$filehandles_to_sort);
-    $bookmarks{$_}  = 0  for (0 .. $#$filehandles_to_sort);
-
-    my ($heldover_highest, $trouble_increment) = ('', 0);
-    
-    while (%in_buffers) {
-        ### Read $max_lines (typically 1000) entries per input file into 
-        ### buffers. 
-        foreach my $file_number (keys %in_buffers) {
-            my $fh = $filehandles_to_sort->[$file_number];
-            seek($fh, $bookmarks{$file_number}, 0);
-            for (1 .. $max_lines) {
-                if (defined(my $entry = (<$fh>))) {
-                    push @{ $in_buffers{$file_number} }, $entry;
-                }
-                else {
-                    last;
-                }
-            }
-            $bookmarks{$file_number} = tell $fh;
-            if (defined $linesep) {
-                chomp @{ $in_buffers{$file_number} };
-            }
-            ### We've attempted to fill the buffer.
-            ### If there's nothing in the buffer, we've exhausted the source
-            ### file, so make the buffer go away. 
-            delete $in_buffers{$file_number} 
-                unless @{ $in_buffers{$file_number} };
-        }
-    
-        ### Get the lowest (in sort order)  of all the last lines from 
-        ### the input_buffers.
-        ### All items less than or equal to this value in sort order are 
-        ### guaranteed to reside in the input_buffers, so we can safely 
-        ### sort them.
-        my @high_candidates;
-        for (values %in_buffers) {
-            push @high_candidates, $_->[-1] if defined $_->[-1];
-        }
-        @high_candidates = $sortsub ?
-                           (sort $sortsub @high_candidates) :
-                           (sort @high_candidates); 
-        my $highest_allowed = $high_candidates[0];
-        if (defined $highest_allowed and $heldover_highest eq $highest_allowed) {
-            $trouble_increment += 1;
-            if ($trouble_increment > 1000 and $self->{-verbosity}) {
-                warn ("We may be stuck in an infinite loop, since we have " .
-                    "seen the same record at least 1000 and probably " .
-                    "several billion times.  This probably means that " .
-                    "we are seeing the latter portion of a record fed to " .
-                    "Sort::External which contained the record separator " .
-                    "embedded within it. [To suppress this warning, set " . 
-                    "-verbosity to 0.] The record in question is: " .
-                    "$highest_allowed");
-                $trouble_increment= 0;
-            }
-        }
-        $heldover_highest = $highest_allowed;
-        ### To conserve memory, reuse the array assigned to the input 
-        ### cache (which is currently empty) as a holder for this batch of 
-        ### sortable items.
-        my $batch = $self->{input_cache};
-
-        ### Capture a batch of items from the input_buffers.  All the items in
-        ### the batch will be lower in sorted order than items yet to enter
-        ### the buffer. 
-        ### Note: The only difference between these two blocks is the
-        ### performance-killing conditional in the first.
-        if ($sortsub) {
-            foreach my $input_buffer (values %in_buffers) {
-                LINE: while (my $line = shift @$input_buffer) {
-                    ### If true, the item lies outside of the allowable
-                    ### boundaries.  Put it back in the queue and skip to 
-                    ### the next input_buffer.
-                    if (
-                        (sort $sortsub ($line, $highest_allowed))[0] 
-                            eq $highest_allowed
-                        and $line ne $highest_allowed) 
-                    {
-                        unshift @$input_buffer, $line;
-                        last LINE;
-                    }
-                    push @$batch, $line;
-                }
-            }
-        }
-        else {
-            foreach my $input_buffer (values %in_buffers) {
-                my $line;
-                LINE: while (defined ($line = shift @$input_buffer)) {
-                    if ($line gt $highest_allowed and $highest_allowed) {
-                        unshift @$input_buffer, $line;
-                        last LINE;
-                    }
-                    push @$batch, $line;
-                }
-            }
-        }
-        
-        @$batch = $sortsub ? 
-                 (sort $sortsub @$batch) :
-                 (sort @$batch);
-        my $write_buffer = '';
-        if (defined $linesep and @$batch) {
-           $write_buffer = (join $linesep, @$batch) .  $linesep;
-        }
-        else {
-            $write_buffer = join '', @$batch;
-        }
-        @$batch = ();
-        
-        ### Start a new outfile if writing the contents of the buffer to the
-        ### existing outfile would cause it to grow larger than the maximum
-        ### allowed filesize.
-        seek($outfile, 0, 2); # EOF
-        my $filelength = tell $outfile;
-        if ((length($write_buffer) + $filelength) > MAX_FS ) {
-            undef $outfile;
-            $outfile = File::Temp->new(
-                DIR => $self->{workdir},
-                UNLINK  => 1
-                );
-            push @outfiles, $outfile;
-        }
-        
-        print $outfile $write_buffer;
-    }
-    
     ### Explicity close the filehandles that were consolidate; since they're
     ### tempfiles, they'll unlink themselves.
-    close $_ for @$filehandles_to_sort;
+    close $_ for @{ $self->{sortfiles}[$input_level] };
+    $self->{sortfiles}[$input_level] = [];
     
     ### Add the filehandle for the outfile(s) to the next higher level of the
     ### sortfiles array.
@@ -446,6 +386,12 @@ sub _consolidate_one_level {
     ### max filesize limit.  Increase the maximum number of files required 
     ### to trigger a sort, so that we don't sort endlessly.
     $self->{max_sortfiles} += ($#outfiles);
+    no strict 'refs';
+    no warnings 'redefine';
+    ### Clear out the closures so that we don't leak memory.
+    for (0 .. $num_packages) {
+        *{ "Sort::External::Buffer$_" . "::next_line" } = sub {};
+    }
 }
 
 1;
@@ -462,7 +408,7 @@ Sort::External - sort huge lists
 
 =head1 SYNOPSIS
 
-    my $sortex = Sort::External->new;
+    my $sortex = Sort::External->new( -mem_threshold = 2 ** 24 );
     while (<HUGEFILE>) {
         $sortex->feed( $_ );
     }
@@ -514,19 +460,21 @@ restore them yourself.
 
 =head2 Memory management
 
-By default, Sort::External's cache size is 10,000 items.  If your items are
-large, you may need to decrease the cache size; if they are small, you
-might improve Sort::External's performance somewhat by increasing the cache
-size. 
+Sort::External functions best when it can accumulate a large input cache
+before sorting the cache and flushing it to disk.  For backwards compatibility
+reasons, the default threshold is 10,000 array items, which may be too high if
+your items are large.  However, starting at version .10, Sort::External
+implements -mem_threshold, an *experimental* feature which makes it possible
+to flush to disk when the amount of memory consumed by the input cache exceeds
+a certain number of bytes.
 
-Because Perl doesn't give you the kind of responsibility for memory management
-that C does (thank goodness), there isn't a reliable way to flush the cache
-automatically based on analyzing memory consumption that doesn't impose a
-severe penalty on performance.  If you want to max out the speed of
-Sort::External, here are two tips: 1) maximum memory usage will likely
-occur when finish() is called, and 2) don't cut things close, because there
-isn't that much to gain and there's a lot to lose if you go over the edge and 
-start hitting swap.
+There are two important caveats to keep in mind about -mem_threshold.  First,
+Sort::External uses L<Devel::Size|Devel::Size> to assess memory consumption,
+which tends to underestimate real memory consumption somewhat -- set the docs
+for details.  Second, the amount of memory consumed by the Sort::External
+process will be no less than double what you set for -mem_threshold, and
+probably considerably more.  Don't get too aggressive.  A good starting
+point is 2**24: 16 megabytes.
 
 =head1 METHODS
 
@@ -537,6 +485,7 @@ start hitting swap.
         -sortsub         => $sortscheme,      # default sort: standard lexical
         -working_dir     => $temp_directory,  # default: see below
         -line_separator  => 'random',         # default: $/
+        -mem_threshold   => 2 ** 24,          # default: 0 (inactive);
         -cache_size      => 100_000,          # default: 10_000;
         );
 
@@ -567,8 +516,13 @@ random 16-byte string suitable for delimiting arbitrary binary data.
 
 =item 
 
+B<-mem_threshold> -- EXPERIMENTAL FEATURE.  Allow the input cache to grow to
+-mem_threshold bytes before sorting it and flushing to disk.  
+
+=item 
+
 B<-cache_size> -- The size for each of Sort::External's caches, in sortable
-items.  
+items.  If -mem_threshold is enabled, -cache_size is ignored.
 
 =back
 
@@ -577,23 +531,31 @@ items.
     $sortex->feed( @items );
 
 Feed one or more sortable items to your Sort::External object.  It is normal
-for occasional pauses to occur as sortfiles are merged.
+for occasional pauses to occur as caches are flushed and sortfiles are merged.
 
 =head2 finish() 
 
-    $sortex->finish( -outfile => 'sorted.txt' );
-    ### or, if you intend to call fetch...
+    ### if you intend to call fetch...
     $sortex->finish; 
+    
+    ### otherwise....
+    use Fcntl;
+    $sortex->finish( 
+        -outfile => 'sorted.txt',
+        -flags => (O_CREAT | O_WRONLY),
+        );
 
 Prepare to output items in sorted order.  If you haven't yet exceeded the
 cache size, Sort::External never writes to disk -- it just sorts the items
 in-memory.
 
 If you specify the parameter -outfile, Sort::External will attempt to write
-your sorted list to that outfile (it will croak() if the file already exists).
+your sorted list to that outfile.  By default, Sort::External will refuse to
+overwrite an existing file; if you want to override that behavior, you can
+pass Fcntl flags to finish() using the optional -flags parameter.
 
-Note that you can either have finish() write to an outfile, or finish() then
-fetch()...  but not both.  
+Note that you can either finish() to an -outfile, or finish() then fetch()...
+but not both.  
 
 =head2 fetch()
 
@@ -615,8 +577,7 @@ summarized like so:
 
 Cache sortable items in memory.  Every X items, sort the cache and empty it
 into a temporary sortfile.  As sortfiles accumulate, interleave them
-periodically into larger sortfiles.  Use caching extensively during the
-interleaving process to minimize I/O.  Complete the sort by emptying the input
+periodically into larger sortfiles.  Complete the sort by emptying the input
 cache then interleaving the contents of all existing sortfiles into an output
 stream.
 
@@ -628,10 +589,7 @@ L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Sort-External>.
 
 =head1 ACKNOWLEDGEMENTS
 
-The code in Sort::External was originally developed as part of the
-L<Search::Kinosearch|Search::Kinosearch> suite.  Chris Nandor helped debug
-that early version and made some excellent suggestions which have been
-incorporated into the present distribution.
+Bug reports and patches: Ken Clarke, Chris Nandor.
 
 =head2 SEE ALSO
 

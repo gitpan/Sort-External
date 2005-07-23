@@ -1,5 +1,6 @@
 Changes
 lib/Sort/External.pm
+lib/Sort/External/Cookbook.pm
 Makefile.PL
 MANIFEST
 META.yml			# Will be created by "make dist"

@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 7; 
+use Test::More tests => 9; 
 use File::Spec;
 
 use Sort::External;
@@ -26,6 +26,7 @@ undef $sortex;
 
 $sortex = Sort::External->new(
     -working_dir => File::Spec->curdir,
+    -mem_threshold => 2 ** 24,
     );
 $sort_output = &reverse_letter_test($sortex);
 is_deeply($sort_output, \@letters, "... with a different working directory");
@@ -38,7 +39,14 @@ $sort_output = &reverse_letter_test($sortex);
 is_deeply($sort_output, \@letters, "... with an absurdly low cache setting");
 undef $sortex;
 
-$sortex = Sort::External->new;
+$sortex = Sort::External->new(
+    -mem_threshold => 20,
+    );
+$sort_output = &reverse_letter_test($sortex);
+is_deeply($sort_output, \@letters, "... with an absurdly low -mem_threshold");
+undef $sortex;
+
+$sortex = Sort::External->new( -mem_threshold => 2 ** 24 );
 $sortex->feed( $_ ) for @reversed_letters;
 $sortex->finish( -outfile => 'sortfile.txt' );
 open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
@@ -57,6 +65,18 @@ open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
 $sort_output = [ <SORTFILE> ];
 is_deeply($sort_output, \@letters, "... to an outfile with a low enough " .
     "cache setting to hit temp");
+undef $sortex;
+unlink "sortfile.txt" or die "Couldn't unlink file 'sortfile.txt': $!";;
+
+$sortex = Sort::External->new(
+    -cache_size => 2,
+    );
+$sortex->feed( $_ ) for @reversed_letters;
+$sortex->finish( -outfile => 'sortfile.txt' );
+open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
+$sort_output = [ <SORTFILE> ];
+is_deeply($sort_output, \@letters, "... to an outfile with an absurdly low" .
+    "-mem_threshold");
 undef $sortex;
 unlink "sortfile.txt" or die "Couldn't unlink file 'sortfile.txt': $!";;
 
