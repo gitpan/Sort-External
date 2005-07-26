@@ -5,6 +5,7 @@ use Test::More tests => 9;
 use File::Spec;
 
 use Sort::External;
+use Fcntl;
 
 my @letters = map { "$_\n" } ( 'a' .. 'z' );
 my @reversed_letters = reverse @letters;
@@ -48,31 +49,40 @@ undef $sortex;
 
 $sortex = Sort::External->new( -mem_threshold => 2 ** 24 );
 $sortex->feed( $_ ) for @reversed_letters;
-$sortex->finish( -outfile => 'sortfile.txt' );
+$sortex->finish( 
+    -outfile => 'sortfile.txt',
+    -flags   => (O_CREAT | O_WRONLY),
+    );
 open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
 $sort_output = [ <SORTFILE> ];
 close SORTFILE;
 is_deeply($sort_output, \@letters, "... to an outfile without hitting temp");
 undef $sortex;
-unlink "sortfile.txt" or die "Couldn't unlink file 'sortfile.txt': $!";;
+unlink "sortfile.txt" or warn "Couldn't unlink file 'sortfile.txt': $!";;
 
 $sortex = Sort::External->new(
     -cache_size => 2,
     );
 $sortex->feed( $_ ) for @reversed_letters;
-$sortex->finish( -outfile => 'sortfile.txt' );
+$sortex->finish( 
+    -outfile => 'sortfile.txt',
+    -flags   => (O_CREAT | O_WRONLY),
+    );
 open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
 $sort_output = [ <SORTFILE> ];
 is_deeply($sort_output, \@letters, "... to an outfile with a low enough " .
     "cache setting to hit temp");
 undef $sortex;
-unlink "sortfile.txt" or die "Couldn't unlink file 'sortfile.txt': $!";;
+unlink "sortfile.txt" or warn "Couldn't unlink file 'sortfile.txt': $!";;
 
 $sortex = Sort::External->new(
     -cache_size => 2,
     );
 $sortex->feed( $_ ) for @reversed_letters;
-$sortex->finish( -outfile => 'sortfile.txt' );
+$sortex->finish( 
+    -outfile => 'sortfile.txt',
+    -flags   => (O_CREAT | O_WRONLY),
+    );
 open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
 $sort_output = [ <SORTFILE> ];
 is_deeply($sort_output, \@letters, "... to an outfile with an absurdly low" .

@@ -15,14 +15,11 @@ Sort::External::Cookbook - sort huge lists efficiently
 Sort::External has a special affinity for the packed-default sort, which first
 came to the author's attention via a paper by Uri Guttman and Larry Rosler,
 "A Fresh Look at Efficient Perl Sorting", located as of this writing at
-L<|http://www.sysarch.com/perl/sort_paper.html>.
+L<http://www.sysarch.com/perl/sort_paper.html>.
 
 For most applications, the packed-default is the most efficient Perl sorting
-transform.  This document explores how to apply it to solve common coding
-problems.
-
-Most of the material herein is also applicable to building a packed-default
-sort with Perl's built-in sort() function.
+transform.  This document explores how to use it to solve common coding
+problems in conjunction with either sort() or Sort::External.
 
 =head1 The Packed-Default Sort 
 
@@ -33,9 +30,9 @@ computationally expensive.  If you can eliminate the sortsub entirely from
 your algo, major optimizations kick in as Perl decides that it can
 perform the whole sort at the C level without leaving to execute Perl code.  
 
-Like Perl's native sort() function, Sort::External really, really likes to use
-the default ascending lexical sort.  If you are chasing efficiency, you should
-do everything you can to avoid supplying Sort::External with a sortsub.
+Like Perl's native sort() function, Sort::External I<really, really> likes to
+use the default ascending lexical sort.  If you are chasing efficiency, you
+should do everything you can to avoid supplying Sort::External with a sortsub.
 
 =head2 Encode, sort, decode.
 

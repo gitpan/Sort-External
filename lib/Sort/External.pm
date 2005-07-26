@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.10_6';
+our $VERSION = '0.10_7';
 
 use File::Temp 'tempdir';
 use Devel::Size qw( size total_size );
@@ -534,7 +534,7 @@ Sort::External - sort huge lists
 
 =head1 SYNOPSIS
 
-    my $sortex = Sort::External->new( -mem_threshold = 2 ** 24 );
+    my $sortex = Sort::External->new( -mem_threshold => 2**24 );
     while (<HUGEFILE>) {
         $sortex->feed( $_ );
     }
@@ -547,7 +547,7 @@ Sort::External - sort huge lists
 
 Problem: You have a list which is too big to sort in-memory.  
 
-Solution: "feed, finish, fetch" with Sort::External, the closest thing to
+Solution: "feed, finish, and fetch" with Sort::External, the closest thing to
 a drop-in replacement for Perl's sort() function when dealing with
 unmanageably large lists.
 
@@ -673,12 +673,10 @@ for occasional pauses to occur as caches are flushed and sortfiles are merged.
         -flags => (O_CREAT | O_WRONLY),
         );
 
-Prepare to output items in sorted order.  If you haven't yet exceeded the
-cache size, Sort::External never writes to disk -- it just sorts the items
-in-memory.
+Prepare to output items in sorted order.
 
 If you specify the parameter -outfile, Sort::External will attempt to write
-your sorted list to that outfile.  By default, Sort::External will refuse to
+your sorted list to that location.  By default, Sort::External will refuse to
 overwrite an existing file; if you want to override that behavior, you can
 pass Fcntl flags to finish() using the optional -flags parameter.
 
