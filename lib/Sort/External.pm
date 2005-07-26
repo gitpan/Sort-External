@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.10_4';
+our $VERSION = '0.10_6';
 
 use File::Temp 'tempdir';
 use Devel::Size qw( size total_size );
@@ -12,6 +12,7 @@ use Fcntl qw( :DEFAULT );
 use Carp;
 use Clone 'clone';
 
+use attributes 'reftype';
 use bytes;
 no bytes; # Import routines, but use character semantics.
 
@@ -84,10 +85,13 @@ sub _init_sort_external {
     }
     
     ### Create a random 16 byte line separator.
+
     my @randstringchars = (('A' .. 'Z'),('a' .. 'z'),(0 .. 9));
     my $linesep = '';
     $linesep .= $randstringchars[rand @randstringchars] for (1 .. 16);
-    $self->{linesep} = defined $self->{-line_separator} ?
+    ### For backwards compatibility...
+    $self->{linesep} = (defined $self->{-line_separator} 
+                        and  $self->{-line_separator} ne 'random') ?
                        $self->{-line_separator} : $linesep;
 }
 
@@ -96,20 +100,20 @@ sub _init_sort_external {
 ##############################################################################
 sub feed {
     my $self = shift;
-    ### Keep a running tally of the cache's approximate memory consumption.
+    
+    push @{ $self->{item_cache} }, @_;
+
     if ($self->{-mem_threshold}) {
+        ### Keep a tally of the cache's approximate memory consumption.
         $self->{mem_bytes} += total_size(\@_);
-        push @{ $self->{item_cache} }, @_;
         $self->_write_item_cache_to_tempfile
             if ($self->{mem_bytes} > $self->{-mem_threshold});
-        return;
     }
-
-    ### If -mem_threshold wasn't specified, use the number of array elements
-    ### in the cache as a buffer flush-trigger instead.
-    push @{ $self->{item_cache} }, @_;
-    return unless @{ $self->{item_cache} } >= $self->{-cache_size};
-    $self->_write_item_cache_to_tempfile;
+    elsif (@{ $self->{item_cache} } >= $self->{-cache_size}) {
+        ### If -mem_threshold wasn't specified, use the number of array
+        ### elements in the cache as a buffer flush-trigger instead.
+        $self->_write_item_cache_to_tempfile;
+    }
 }
 
 my %finish_defaults = (
@@ -282,6 +286,15 @@ sub _consolidate_one_level {
     
     ### Create a holder for the output filehandles if necessary.
     $self->{sortfiles}[$input_level + 1] ||= [];
+
+    ### If there's only one sortfile in this level, kick it up to the next
+    ### level.
+    if (@{ $self->{sortfiles}[$input_level] } == 1) {
+        push @{ $self->{sortfiles}[$input_level + 1] }, 
+            @{ $self->{sortfiles}[$input_level] };
+        $self->{sortfiles}[$input_level] = [];
+        return;
+    }
 
     my @outfiles;
     ### Get a new outfile
@@ -532,9 +545,11 @@ Sort::External - sort huge lists
 
 =head1 DESCRIPTION
 
-Problem: You have a list which is too big to sort in-memory.  Solution:  Use
-Sort::External, the closest thing to a drop-in replacement for
-Perl's sort() function when dealing with unmanageably large lists.
+Problem: You have a list which is too big to sort in-memory.  
+
+Solution: "feed, finish, fetch" with Sort::External, the closest thing to
+a drop-in replacement for Perl's sort() function when dealing with
+unmanageably large lists.
 
 =head2 Where's the sortex() function?
 
@@ -543,38 +558,48 @@ could swap with sort() and be done.  That isn't possible, because it would
 have to return a list which would, in all likelihood, be too large to fit in
 memory -- otherwise, why use Sort::External in the first place?  
 
-=head2 Replacing sort() with Sort::External
+=head2 How it works
 
-=head3 undefs and  refs
+Cache sortable items in memory.  Periodically sort the cache and empty it into
+a temporary sortfile.  As sortfiles accumulate, interleave them into larger
+sortfiles.  Complete the sort by sorting the input cache and any existing
+sortfiles into an output stream.
 
-When you replace sort() with the "feed, finish, fetch" cycle of a
-Sort::External object, you have to watch out for "undefs and refs".
+In the CS world, "internal sorting" refers to sorting data in RAM, while
+"external sorting" refers to sorting data which is stored on disk, tape,
+punchcards, or any storage medium except RAM -- hence, this module's name.
 
-Perl's sort() function sorts undef values to
-the front of a list -- it will complain if you have warnings enabled, but it
-preserves their undef-ness.  sort() also preserves references.  In contrast,
-Sort::External's behavior is unpredictable and almost never desirable when you
-feed it either undef values or references.  If you really care about sorting
-lists containing undefs or refs, you'll have to symbollically replace and
-restore them yourself.
+Note that if Sort::External hasn't yet flushed the cache to disk when finish()
+is called, the whole operation completes in-memory.
 
-=head3 Subtle changes to scalars, e.g. utf8 flags get stripped
+=head2 undefs and refs
 
-Sort::External writes items to disk and reads them back.  The stringified
-return scalars will be match input strings exactly, but a scalar input which
-was previously marked as utf8 will not come back with that flag set. (There
-are other subtle changes, but they wouldn't matter unless you're doing XS
-programming, in which case you already know what to expect.)
+Perl's sort() function sorts undef values to the front of a list -- it will
+complain if you have warnings enabled, but it preserves their undef-ness.
+sort() also preserves references.  In contrast, Sort::External's behavior is
+unpredictable and almost never desirable when you feed it either undefs or
+refs.  If you really care about sorting lists containing undefs or refs,
+you'll have to symbollically replace and restore them yourself.
+
+=head2 Subtle changes to scalars e.g. utf8 flags get stripped
+
+Once the input cache grows large enough, Sort::External writes items to disk
+and throws them away, recreating them later by reading back from disk.  These
+stringified return scalars will have changed in one subtle respect: if they
+were tagged as utf8 before, they may not be now. (There are other subtle
+changes, but they don't matter unless you're working at the
+L<perlguts|perlguts> level, in which case you know what to expect.)
 
 =head2 Memory management
 
 Sort::External functions best when it can accumulate a large input cache
-before sorting the cache and flushing it to disk.  For backwards compatibility
-reasons, the default trigger for a buffer flush is the accumulation of 10,000
-array items, which may be too high if your items are large.  However, starting
-at version .10, Sort::External implements -mem_threshold, an *experimental*
-feature which makes it possible to flush to disk when the amount of memory
-consumed by the input cache exceeds a certain number of bytes.
+before sorting the cache and flushing it to disk.  For backwards
+compatibility, the default trigger for a buffer flush is the accumulation of
+10,000 array items, which may be too high if your items are large.  However,
+starting at version 0.10, Sort::External implements -mem_threshold, an
+*experimental* feature which makes it possible to flush to disk when the
+amount of memory consumed by the input cache exceeds a certain number of
+bytes.
 
 There are two important caveats to keep in mind about -mem_threshold.  First,
 Sort::External uses L<Devel::Size|Devel::Size> to assess memory consumption,
@@ -667,22 +692,6 @@ but not both.
     }
 
 Fetch the next sorted item.  
-
-=head1 DISCUSSION
-
-=head2 "internal" vs. "external" sorting 
-
-In the CS world, "internal sorting" refers to sorting data in RAM, while
-"external sorting" refers to sorting data which is stored on disk, tape, or
-any storage medium except RAM.  The main goal when implementing an external
-sorting algorithm is to minimize disk I/O.  Sort::External's routine can be
-summarized like so:
-
-Cache sortable items in memory.  Every X items, sort the cache and empty it
-into a temporary sortfile.  As sortfiles accumulate, interleave them
-periodically into larger sortfiles.  Complete the sort by emptying the input
-cache then interleaving the contents of all existing sortfiles into an output
-stream.
 
 =head1 BUGS
 
