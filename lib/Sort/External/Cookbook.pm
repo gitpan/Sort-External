@@ -161,10 +161,7 @@ sortable form. The four integer pack formats which sort correctly are:
     while (my ($variety, $year) = each %first_introduced) {
         push @sortkeys, (pack('n', $year) . $variety);
     }
-    my $sortex = Sort::External->new(
-        -mem_threshold  => 2**24,
-        -line_separator => 'random', # required!
-        );
+    my $sortex = Sort::External->new( -mem_threshold  => 2**24 );
     $sortex->feed(@sortkeys);
     $sortex->finish;
     my @sorted; 
@@ -172,11 +169,6 @@ sortable form. The four integer pack formats which sort correctly are:
         push @sorted, substr($_, 2);
     }
     
-Packed integers may contain byte sequences which look like newlines or
-carriage-returns, so you if you are using Sort::External, you must activate a
-special -line_separator to delimit your rows.  See the
-L<Sort::External|Sort::External> docs.
-
 =head2 Combining encoding techniques
 
 It is often the case that a combination of techniques yields the most
@@ -242,9 +234,6 @@ sortkeys.
     my @sorted = sort @sortkeys;
     @sorted = map { ~ $_ } @sorted;
     @sorted = map { substr($_, 5) } @sorted;
-
-As when packing positive integers, you must specify a -line_separator when
-using this technique with Sort::External.
 
 =head2 Multi-field sorting with mixed asc/desc order
 

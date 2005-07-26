@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.10_3';
+our $VERSION = '0.10_4';
 
 use File::Temp 'tempdir';
 use Devel::Size qw( size total_size );
@@ -31,7 +31,7 @@ use constant MAX_FS => 2 ** 31; # 2 Gbytes;
 our %class_defaults = (
     -sortsub                => undef,
     -working_dir            => undef,
-    -line_separator         => undef,
+    -line_separator         => undef, # backwards compat only.
     -cache_size             => 10_000,
     -mem_threshold          => 0, 
     -verbosity              => 1,
@@ -83,19 +83,12 @@ sub _init_sort_external {
         $self->{workdir} = tempdir( CLEANUP => 1 ); 
     }
     
-    ### If a 'random' -line_separator was called for, generate it.
-    if (!defined $self->{-line_separator}) {
-        $self->{linesep} = undef;
-    }
-    elsif ($self->{-line_separator} eq 'random') {
-        my @randstringchars = (('A' .. 'Z'),('a' .. 'z'),(0 .. 9));
-        my $linesep = '';
-        $linesep .= $randstringchars[rand @randstringchars] for (1 .. 16);
-        $self->{linesep} = $linesep;
-    }
-    else {
-        $self->{linesep} = $self->{-line_separator};
-    }
+    ### Create a random 16 byte line separator.
+    my @randstringchars = (('A' .. 'Z'),('a' .. 'z'),(0 .. 9));
+    my $linesep = '';
+    $linesep .= $randstringchars[rand @randstringchars] for (1 .. 16);
+    $self->{linesep} = defined $self->{-line_separator} ?
+                       $self->{-line_separator} : $linesep;
 }
 
 ##############################################################################
@@ -150,22 +143,14 @@ sub finish {
         print OUTFILE for @{ $self->{item_cache} };
 
         ### Print all sortfiles to the outfile, in order.
+        local $/ = $self->{linesep};
         for my $fh (@{ $self->{sortfiles}[-1] }) {
             seek ($fh, 0, 0);
             my $entry;
-            if (defined $self->{linesep}) {
-                local $/ = $self->{linesep};
-                while (defined($entry = (<$fh>))) {
-                    chomp $entry;
-                    print OUTFILE $entry
-                        or croak("Couldn't print to '$args{-outfile}': $!");
-                }
-            }
-            else {
-                while (defined($entry = (<$fh>))) {
-                    print OUTFILE $entry
-                        or croak("Couldn't print to '$args{-outfile}': $!");
-                }
+            while (<$fh>) {
+                chomp;
+                print OUTFILE
+                    or croak("Couldn't print to '$args{-outfile}': $!");
             }
         }
         close OUTFILE or croak("Couldn't close '$args{-outfile}': $!");
@@ -215,7 +200,6 @@ sub _write_item_cache_to_tempfile {
     my $self = shift;
     my $item_cache = $self->{item_cache};
     my $sortsub = $self->{-sortsub};
-    my $linesep = $self->{linesep};
 
     return unless @$item_cache;
 
@@ -232,17 +216,9 @@ sub _write_item_cache_to_tempfile {
                    (sort @$item_cache);
 
     ### Print the sorted cache to the tempfile.
-    if (defined $linesep) {
-        my $printbuff = join $linesep, @$item_cache;
-        print $tmp $printbuff, $linesep 
-            or croak("Print to $tmp failed: $!");
-    }
-    else {
-        for (@$item_cache) {
-            print $tmp $_
-                or croak("Print to $tmp failed: $!");
-        }
-    }
+    my $printbuff = join $self->{linesep}, @$item_cache;
+    print $tmp $printbuff, $self->{linesep} 
+        or croak("Print to $tmp failed: $!");
     
     ### Reset variables.
     $self->{mem_bytes} = 0;
@@ -302,9 +278,7 @@ sub _consolidate_one_level {
     
     my $sortsub = $self->{-sortsub};
     my $linesep = $self->{linesep};
-
-    local $/ = $linesep 
-        if defined $linesep;
+    local $/ = $linesep;
     
     ### Create a holder for the output filehandles if necessary.
     $self->{sortfiles}[$input_level + 1] ||= [];
@@ -329,7 +303,6 @@ sub _consolidate_one_level {
         push @in_buffers, $buff;
     }
     
-    my $joiner = defined $linesep ? $linesep : '';
     BIGBUFF: while (@in_buffers) {
         my @on_the_bubble;
 
@@ -385,8 +358,8 @@ sub _consolidate_one_level {
         ### Sort the batch and print it to an outfile, opening a new outfile
         ### if necessary.
         @batch = $sortsub ? (sort $sortsub @batch) : (sort @batch);
-        my $outbuffer = join $joiner, @batch;
-        $outfile_length += bytes::length($outbuffer) + bytes::length($joiner);
+        my $outbuffer = join $linesep, @batch;
+        $outfile_length += bytes::length($outbuffer) + 16;
         if ($outfile_length > MAX_FS) {
             $outfile = File::Temp->new(
                 DIR => $self->{workdir},
@@ -394,9 +367,9 @@ sub _consolidate_one_level {
                 );
             push @outfiles, $outfile;
             $outfile_length = 
-                bytes::length($outbuffer) + bytes::length($joiner);
+                bytes::length($outbuffer) + 16;
         }
-        print $outfile $outbuffer, $joiner;
+        print $outfile $outbuffer, $linesep;
     }
             
     ### Explicity close the filehandles that were consolidated; since they're
@@ -453,6 +426,7 @@ sub _refill_buffer {
     my $self = shift;
     my $tf_handle = $self->{tf_handle};
     my $buffarray = $self->{buffarray};
+    local $/ = $self->{linesep};
 
     ### Read data in 32k chunks.
     ### Strangely, bigger chunks can hinder performance.
@@ -461,75 +435,38 @@ sub _refill_buffer {
     ### buffarray (in case the lines are really long). 
     my $starter = 1; 
     while (@$buffarray < 2 or $starter) {
-        if ($starter or defined ($self->{read_buffer})) {
-            seek($tf_handle, $self->{read_pos}, 0);
-            my $offset = defined $self->{read_buffer} ? 
-                bytes::length($self->{read_buffer}) : 0;
-            if ($offset < 2**15) {
-                read($tf_handle, $self->{read_buffer}, 2**15, $offset);
-                $self->{read_pos} += 2**15;
-            }
-            ### split() is nice and efficient, if we know a fixed linesep...
-            if (defined $self->{linesep}) {
-                ### The -1 is crucial.
-                push @$buffarray, 
-                    (split $self->{linesep}, $self->{read_buffer}, -1);
-                ### If the end of the read buffer was aligned with a linesep, 
-                ### The last item is an empty string.  If it wasn't, then it's
-                ### a partial item.  In either case, we 
-                $self->{read_buffer} = pop @$buffarray;
-            }
-            ### ... but if we don't, we have to go into lexer mode, and
-            ### account for various line ending configurations.
-            ### This  platform-neutral regex matches one line of text.
-            else {
-                while ($self->{read_buffer} 
-                    =~ m/\G              # Bump along.
-
-                       (\C*?              # Capture everything up to and
-                                         # including the line ending.
-                                         
-                         [\015\012]      # Either a CR or LF
-                           (?:
-                             (?<=\015)   # If it was a CR...
-                             \012        # ... match an LF.
-                           )?
-                       )
-                     /xgc)
-                {
-                    push @$buffarray, $1;                 
-                }
-                ### Eliminate everything we've matched from the scalar read
-                ### buffer.  If there's an unmatch partial line, keep that 
-                ### in the read buffer.
-                my $pos = pos($self->{read_buffer});
-                if (defined ($self->{read_buffer}) and defined($pos)) {
-                    $self->{read_buffer} =
-                         bytes::substr($self->{read_buffer}, $pos);
-                }
-                ### Reset the read buffer's pos, so that the lexer will work.
-                pos($self->{read_buffer}) = 0;
-            }
-            $offset = defined $self->{read_buffer} ? 
-                bytes::length($self->{read_buffer}) : 0;
-            seek($tf_handle, $self->{read_pos}, 0);
-            if(read($tf_handle, $self->{read_buffer}, 2**15, $offset)) {
-                $self->{read_pos} += 2**15;
-            }
-            ### If the read failed, but there's data in the buffer, it's
-            ### the last line, so move it to the cache.
-            elsif ($offset) {
-                if (defined $self->{linesep}) {
-                    local $/ = $self->{linesep};
-                    chomp $self->{read_buffer};
-                }
-                push @$buffarray, $self->{read_buffer};
-                $self->{read_buffer} = undef;
-                last;
-            }
-            else {
-                last;
-            }
+        seek($tf_handle, $self->{read_pos}, 0);
+        my $offset = defined $self->{read_buffer} ? 
+            bytes::length($self->{read_buffer}) : 0;
+        if ($offset < 2**15) {
+            read($tf_handle, $self->{read_buffer}, 2**15, $offset);
+            $self->{read_pos} += 2**15;
+        }
+        ### The -1 is crucial.
+        push @$buffarray, 
+            (split $self->{linesep}, $self->{read_buffer}, -1);
+        ### If the end of the read buffer was aligned with a linesep, 
+        ### The last item is an empty string.  If it wasn't, then it's
+        ### a partial item.  In either case, we put it back in the
+        ### read_buffer.
+        $self->{read_buffer} = pop @$buffarray;
+        
+        $offset = defined $self->{read_buffer} ? 
+            bytes::length($self->{read_buffer}) : 0;
+        seek($tf_handle, $self->{read_pos}, 0);
+        if(read($tf_handle, $self->{read_buffer}, 2**15, $offset)) {
+            $self->{read_pos} += 2**15;
+        }
+        ### If the read failed, but there's data in the buffer, it's
+        ### the last line, so move it to the cache.
+        elsif ($offset) {
+            chomp $self->{read_buffer};
+            push @$buffarray, $self->{read_buffer};
+            $self->{read_buffer} = undef;
+            last;
+        }
+        else {
+            last;
         }
         $starter = 0; 
     }
@@ -608,22 +545,12 @@ memory -- otherwise, why use Sort::External in the first place?
 
 =head2 Replacing sort() with Sort::External
 
+=head3 undefs and  refs
+
 When you replace sort() with the "feed, finish, fetch" cycle of a
-Sort::External object, there are two things to watch out for.
+Sort::External object, you have to watch out for "undefs and refs".
 
-=over
-
-=item 
-
-B<-line_separator> -- Sort::External uses temp files to cache sortable items.
-If each item is terminated by LF/CRLF/CR, as would be the case for lines
-from a text file, then Sort::External has no problem figuring out where items
-begin and end when reading back from disk.  If that's not the case, you need
-to set a -line_separator, as documented below. 
-
-=item 
-
-B<undef values and references> -- Perl's sort() function sorts undef values to
+Perl's sort() function sorts undef values to
 the front of a list -- it will complain if you have warnings enabled, but it
 preserves their undef-ness.  sort() also preserves references.  In contrast,
 Sort::External's behavior is unpredictable and almost never desirable when you
@@ -631,17 +558,23 @@ feed it either undef values or references.  If you really care about sorting
 lists containing undefs or refs, you'll have to symbollically replace and
 restore them yourself.
 
-=back
+=head3 Subtle changes to scalars, e.g. utf8 flags get stripped
+
+Sort::External writes items to disk and reads them back.  The stringified
+return scalars will be match input strings exactly, but a scalar input which
+was previously marked as utf8 will not come back with that flag set. (There
+are other subtle changes, but they wouldn't matter unless you're doing XS
+programming, in which case you already know what to expect.)
 
 =head2 Memory management
 
 Sort::External functions best when it can accumulate a large input cache
 before sorting the cache and flushing it to disk.  For backwards compatibility
-reasons, the default threshold is 10,000 array items, which may be too high if
-your items are large.  However, starting at version .10, Sort::External
-implements -mem_threshold, an *experimental* feature which makes it possible
-to flush to disk when the amount of memory consumed by the input cache exceeds
-a certain number of bytes.
+reasons, the default trigger for a buffer flush is the accumulation of 10,000
+array items, which may be too high if your items are large.  However, starting
+at version .10, Sort::External implements -mem_threshold, an *experimental*
+feature which makes it possible to flush to disk when the amount of memory
+consumed by the input cache exceeds a certain number of bytes.
 
 There are two important caveats to keep in mind about -mem_threshold.  First,
 Sort::External uses L<Devel::Size|Devel::Size> to assess memory consumption,
@@ -653,33 +586,6 @@ a very high -mem_threshold provides outsized benefits is when it's big enough
 that it prevents a disk flush -- in which case, you might just want to use
 sort(). 
 
-=head2 Compatibility
-
-Sort::External works with...
-
-=over
-
-=item * 
-
-ASCII, all flavors of ISO-8859, and any other single-byte encoding scheme that
-terminates lines using either LF, CRLF, or CR.  Sort::External is platform-
-neutral with regards to line-endings.
-
-=item *
-
-arbitrary binary data, in conjunction with a -line_separator.
-
-=item * 
-
-anything else... so long as you treat the "anything else" like arbitrary
-binary data.
-
-=back
-
-For instance, Sort::External can sort utf8 strings, but only if you specify a
--line_separator -- and regardless of what you feed() your sortex object, the 
-scalars that you get back from fetch() will NOT be marked with a utf8 flag.  
-
 =head1 METHODS
 
 =head2 new()
@@ -688,7 +594,6 @@ scalars that you get back from fetch() will NOT be marked with a utf8 flag.
     my $sortex = Sort::External->new(
         -sortsub         => $sortscheme,      # default sort: standard lexical
         -working_dir     => $temp_directory,  # default: see below
-        -line_separator  => 'random',         # default: see below
         -mem_threshold   => 2 ** 24,          # default: 0 (inactive)
         -cache_size      => 100_000,          # default: 10_000
         );
@@ -713,23 +618,13 @@ tempdir() command.
 
 =item 
 
-B<-line_separator> -- By default, Sort::External assumes that your items are
-already terminated with either LF, CRLF, or CR (it can handle all three, even
-mixed in the same file).  If that's not true, you have two options: 1) specify
-your own value for -line_separator (which Sort::External will append to each
-item when storing and chomp() away upon retrieval) or 2) specify 'random', in
-which case Sort::External will use a random 16-byte string suitable for
-delimiting arbitrary binary data.
-
-=item 
-
 B<-mem_threshold> -- EXPERIMENTAL FEATURE.  Allow the input cache to grow to
 -mem_threshold bytes before sorting it and flushing to disk.  Suggested value:
 Start somewhere between 2**20 and 2**24: 1-16 Mb.
 
 =item 
 
-B<-cache_size> -- The size for each of Sort::External's caches, in sortable
+B<-cache_size> -- The size for Sort::External's input cache, in sortable
 items.  If -mem_threshold is enabled, -cache_size is ignored.
 
 =back
