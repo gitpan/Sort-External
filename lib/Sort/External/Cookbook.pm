@@ -13,9 +13,9 @@ Sort::External::Cookbook - sort huge lists efficiently
 =head1 DESCRIPTION
 
 Sort::External has a special affinity for the packed-default sort, which first
-came to the author's attention via a paper by Uri Guttman and Larry Rosler:
-L<A Fresh Look at Efficient Perl
-Sorting|http://www.sysarch.com/perl/sort_paper.html>.
+came to the author's attention via a paper by Uri Guttman and Larry Rosler,
+"A Fresh Look at Efficient Perl Sorting", located as of this writing at
+L<|http://www.sysarch.com/perl/sort_paper.html>.
 
 For most applications, the packed-default is the most efficient Perl sorting
 transform.  This document explores how to apply it to solve common coding
@@ -288,7 +288,7 @@ sort.  The only way to avoid a sortsub is to double-encode:
     ###     "yellow",
     ###     );
 
-=head2 A challenge
+=head1 A challenge
 
 Ken Clarke has identified a case where there seems to be no elegant
 packed-default sort solution:
@@ -301,8 +301,7 @@ packed-default sort solution:
 There doesn't appear to be a way to perform this sort without a
 characterization pass.
 
-If you come up with an efficient solution, please write the
-L<author|http://www.rectangular.com/about.html>.
+If you come up with an efficient solution, please write the author.
 
 =head1 ACKNOWLEDGEMENTS
 

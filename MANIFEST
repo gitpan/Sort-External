@@ -8,5 +8,6 @@ README
 t/00-load.t
 t/01-simplesort.t
 t/02-binary.t
+t/benchmark_sortex.plx
 t/pod-coverage.t
 t/pod.t
