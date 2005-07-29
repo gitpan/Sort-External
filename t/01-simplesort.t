@@ -88,7 +88,7 @@ $sort_output = [ <SORTFILE> ];
 is_deeply($sort_output, \@letters, "... to an outfile with an absurdly low" .
     "-mem_threshold");
 undef $sortex;
-unlink "sortfile.txt" or die "Couldn't unlink file 'sortfile.txt': $!";;
+unlink "sortfile.txt" or warn "Couldn't unlink file 'sortfile.txt': $!";;
 
 $sortex = Sort::External->new;
 $sortex->finish;

@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.10_7';
+our $VERSION = '0.10';
 
 use File::Temp 'tempdir';
 use Devel::Size qw( size total_size );
@@ -584,11 +584,13 @@ you'll have to symbollically replace and restore them yourself.
 =head2 Subtle changes to scalars e.g. utf8 flags get stripped
 
 Once the input cache grows large enough, Sort::External writes items to disk
-and throws them away, recreating them later by reading back from disk.  These
-stringified return scalars will have changed in one subtle respect: if they
-were tagged as utf8 before, they may not be now. (There are other subtle
-changes, but they don't matter unless you're working at the
-L<perlguts|perlguts> level, in which case you know what to expect.)
+and throws them away, only to recreate them later by reading back from disk.
+Provided that the sort does not complete in-memory, the stringified return
+scalars you get back from Sort::External will have changed in one subtle
+respect from their precursors: if they were tagged as utf8 before, they won't
+be now. (There are other subtle changes, but they don't matter unless you're
+working at the L<perlguts|perlguts> level, in which case you know what to
+expect.)
 
 =head2 Memory management
 

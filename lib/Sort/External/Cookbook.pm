@@ -66,7 +66,7 @@ process:
     my @sorted_by_color = sort @sortkeys; # no sortsub!
     
     ### 3. Decode
-    @sorted_by_color = map { substr($_, 5) } @sorted_by_color;
+    @sorted_by_color = map { substr($_, 6) } @sorted_by_color;
     
 Using Sort::External, steps 2 and 3 are modified:
 
@@ -84,7 +84,7 @@ Using Sort::External, steps 2 and 3 are modified:
     ### 3. Decode
     my @sorted_by_color; 
     while (defined($_ = $sortex->fetch)) {
-        push @sorted_by_color, substr($_, 5);
+        push @sorted_by_color, substr($_, 6);
     }
 
 For the sake of brevity, we'll use sort() instead of Sort::External for most
