@@ -1,27 +1,37 @@
 Revision history for Sort-External
 
-0.10    In development
+0.11    2005-09-17
+        5-40% speed improvement, depending on config
+        Now an XS module (it already had XS dependencies)
+        Eliminated Devel::Size dependency
+        -mem_threshold now uses cruder but quicker algo for tracking memory
+        Now uses custom IO setup based on length => string pairings
+        Bugs associated with old IO based on linesep and split now gone
+        -line_separator deprecated, custom -line_separator removed
+        Fixed failing test
+
+0.10    2005-07-28
         Implemented -mem_threshold, which required extensive rewrites to
             several subs.
-        implemented -flags parameter to finish().
+        Implemented -flags parameter for finish().
 
-0.05    2005-07-17 19:00:00
+0.05    2005-07-17
         Fixed bug with empty -sortfile when no tempfiles were needed.
         Fixed bug sorting empty strings with -line_separator specified.
 
-0.04    2005-06-29 15:00:00
+0.04    2005-06-29
         Fixed 2 bugs regarding random line separator.
 
-0.03    2005-06-09 20:00:00
+0.03    2005-06-09
         Fixed 1-in-10 crashing bug.
         Added 'random' -line_separator functionality.
 
-0.02    2005-06-07 14:00:00
+0.02    2005-06-07
         Fixed bug where fetch returned 0 rather than undef.
         Fixed crashing bug when finish called before feed.
         Change to only use disk cache if necessary.
 
-0.01    2005-05-29 14:00:00
+0.01    2005-05-29
         First version.  Moved from Sort::MonsterSort to Sort::External at the
         suggestion of the PAUSE admins.
 

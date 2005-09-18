@@ -58,22 +58,22 @@ $sort_output = [ <SORTFILE> ];
 close SORTFILE;
 is_deeply($sort_output, \@letters, "... to an outfile without hitting temp");
 undef $sortex;
-unlink "sortfile.txt" or warn "Couldn't unlink file 'sortfile.txt': $!";;
+unlink "sortfile.txt" or 1; # Stop! or I'll say "stop" again.
 
 $sortex = Sort::External->new(
     -cache_size => 2,
     );
 $sortex->feed( $_ ) for @reversed_letters;
 $sortex->finish( 
-    -outfile => 'sortfile.txt',
+    -outfile => 'sortfile2.txt',
     -flags   => (O_CREAT | O_WRONLY),
     );
-open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
+open SORTFILE, "sortfile2.txt" or die "Couldn't open file 'sortfile2.txt': $!";
 $sort_output = [ <SORTFILE> ];
 is_deeply($sort_output, \@letters, "... to an outfile with a low enough " .
     "cache setting to hit temp");
 undef $sortex;
-unlink "sortfile.txt" or warn "Couldn't unlink file 'sortfile.txt': $!";;
+unlink "sortfile2.txt" or 1;
 
 $sortex = Sort::External->new(
     -cache_size => 2,

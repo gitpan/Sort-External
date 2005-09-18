@@ -4,114 +4,96 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.10';
+our $VERSION = '0.11_1';
+
+require XSLoader;
+XSLoader::load('Sort::External', $VERSION);
 
 use File::Temp 'tempdir';
-use Devel::Size qw( size total_size );
 use Fcntl qw( :DEFAULT );
 use Carp;
 use Clone 'clone';
 
 use attributes 'reftype';
 use bytes;
-no bytes; # Import routines, but use character semantics.
+no  bytes; # import routines, but use character semantics
 
-### Coding convention:
-### Public methods use hash style parameters except when to do so would cause 
-### a significant performance penalty.  The parameter names are prepended with
-### a dash, e.g. '-foo'.  When it is necessary to modify a parameter value
-### for use, it is copied into a similarly named variable without a dash: e.g.
-### $self->{-working_dir} gets copied to $self->{workdir}.
+use constant MAX_SORTFILES => 10;
 
-### The maximum size that temp files are allowed to attain.
-use constant MAX_FS => 2 ** 31; # 2 Gbytes;
-
-##############################################################################
-### Class defaults 
-##############################################################################
-our %class_defaults = (
+our %instance_vars = (
     -sortsub                => undef,
     -working_dir            => undef,
-    -line_separator         => undef, # backwards compat only.
+    -line_separator         => undef, # no-op, just there to stop crash
     -cache_size             => 10_000,
     -mem_threshold          => 0, 
     -verbosity              => 1,
     
-    ### Cleaned up versions of -working_dir and -line_separator
+    # cleaned up versions of -working_dir and -line_separator
     workdir                 => undef,
-    linesep                 => undef,
-    ### Storage area used by both feed and fetch.
-    ### May become shared with $self->{out_buff}{buffarray}
+    # storage area used by both feed and fetch
     item_cache              => [],
-    ### A place for tempfile handles to accumulate.
+    # a place for tempfile handles to accumulate
     sortfiles               => [ [] ],
-    ### The number of sortfiles at one level.  Can grow.  See further comments
-    ### in _consolidate_one_level() 
-    max_sortfiles           => 10,
-    ### A tally of the bytes used by the item_cache.
+    # a tally of the bytes used by the item_cache
     mem_bytes               => 0,
-    ### A Sort::External::Buffer object, created on the first call to fetch()
+    # a Sort::External::Buffer object, created on the first call to fetch()
     out_buff                => undef,
-    );
+);
 
-##############################################################################
-### Constructor
-##############################################################################
 sub new {
-    my $class = shift;
-    $class = ref($class) || $class;
-    my $self = clone(\%class_defaults);
-    bless $self, $class;
-    $self->_init_sort_external(@_);
+    my $class = shift; # leave the rest of @_ intact
+    
+    # clone the instance_vars hash and bless it
+    $class = ref($class) || $class; 
+    my $defaults;
+    {
+        no strict 'refs'; 
+        $defaults = \%{ $class . '::instance_vars' };
+    }
+    my $self = clone($defaults);
+    bless $self, $class; 
+
+    $self->init_instance(@_);
+
     return $self;
 }
 
-##############################################################################
-### Initialize a Sort::External object.
-##############################################################################
-sub _init_sort_external {
+sub init_instance {
     my $self = shift;
+
+    # verify args
     while (@_) {
         my ($var, $val) = (shift, shift);
         croak("Illegal parameter: '$var'") 
-            unless exists $class_defaults{$var};
+            unless exists $self->{$var};
         $self->{$var} = $val;
     }
 
-    ### Create a temp directory.
+    # create a temp directory
     $self->{workdir} = $self->{-working_dir};
     unless (defined $self->{workdir}) {
         $self->{workdir} = tempdir( CLEANUP => 1 ); 
     }
-    
-    ### Create a random 16 byte line separator.
 
-    my @randstringchars = (('A' .. 'Z'),('a' .. 'z'),(0 .. 9));
-    my $linesep = '';
-    $linesep .= $randstringchars[rand @randstringchars] for (1 .. 16);
-    ### For backwards compatibility...
-    $self->{linesep} = (defined $self->{-line_separator} 
-                        and  $self->{-line_separator} ne 'random') ?
-                       $self->{-line_separator} : $linesep;
+    croak("custom -line_separator capabilities have been removed")
+        if (defined $self->{-line_separator} 
+            and $self->{-line_separator} ne 'random'); 
+        
 }
 
-##############################################################################
-### Feed one or more items to the Sort::External object.
-##############################################################################
 sub feed {
     my $self = shift;
     
     push @{ $self->{item_cache} }, @_;
 
     if ($self->{-mem_threshold}) {
-        ### Keep a tally of the cache's approximate memory consumption.
-        $self->{mem_bytes} += total_size(\@_);
+        # keep a tally of the cache's approximate memory consumption
+        $self->{mem_bytes} += _add_up_lengths(@_);
         $self->_write_item_cache_to_tempfile
             if ($self->{mem_bytes} > $self->{-mem_threshold});
     }
+    # use the number of array elements in the cache as a flush-trigger
     elsif (@{ $self->{item_cache} } >= $self->{-cache_size}) {
-        ### If -mem_threshold wasn't specified, use the number of array
-        ### elements in the cache as a buffer flush-trigger instead.
         $self->_write_item_cache_to_tempfile;
     }
 }
@@ -119,19 +101,16 @@ sub feed {
 my %finish_defaults = (
     -outfile => undef,
     -flags   => (O_CREAT | O_EXCL | O_WRONLY),
-    );
+);
 
-##############################################################################
-### Sort all items, to an outfile if desired.
-##############################################################################
 sub finish {
     my $self = shift;
     
     $self->_consolidate_sortfiles('final');
         
-    ### If called with arguments, we must be printing everything to an
-    ### outfile.
+    # if called with arguments, we must be printing everything to an outfile
     if (@_) {
+        # verify args
         my %args = %finish_defaults;
         while (@_) {
             my ($var, $val) = (shift, shift);
@@ -140,37 +119,37 @@ sub finish {
             $args{$var} = $val;
         }
 
-        ### Get an outfile.
+        # get an outfile
         croak('Argument -outfile is required') unless defined $args{-outfile};
         sysopen(OUTFILE, $args{-outfile}, $args{-flags})
             or croak ("Couldn't open outfile '$args{-outfile}': $!");
         print OUTFILE for @{ $self->{item_cache} };
 
-        ### Print all sortfiles to the outfile, in order.
-        local $/ = $self->{linesep};
+        # print all sortfiles to the outfile, in order
         for my $fh (@{ $self->{sortfiles}[-1] }) {
             seek ($fh, 0, 0);
-            my $entry;
-            while (<$fh>) {
-                chomp;
-                print OUTFILE
-                    or croak("Couldn't print to '$args{-outfile}': $!");
+            my $out_buff = Sort::External::Buffer->_new(
+                tf_handle => $fh,
+            );
+            while ($out_buff->_refill_buffer) {
+                for(@{ $out_buff->{buffarray} }) {
+                    print OUTFILE
+                        or croak("Couldn't print to '$args{-outfile}': $!");
+                }
+                $out_buff->{buffarray} = [];
             }
         }
         close OUTFILE or croak("Couldn't close '$args{-outfile}': $!");
     }
 }
 
-##############################################################################
-### Retrieve items in sorted order.
-##############################################################################
 sub fetch {
     my $self = shift;
-    ### If the cache has items in it, return one...
+    # if the cache has items in it, return one...
     if (@{ $self->{item_cache} }) {
         return shift @{ $self->{item_cache} };
     }
-    ### otherwise, try to refill the cache...
+    # otherwise, try to refill the cache...
     elsif ($self->{out_buff}) {
         my $out_buff = $self->{out_buff};
         if ($out_buff->_refill_buffer) {
@@ -180,26 +159,27 @@ sub fetch {
             undef $self->{out_buff};
         }
     }
-    ### Create a Sort::External::Buffer object to manage the cache.
+
+    # create a Sort::External::Buffer object to manage the cache
     if (!$self->{out_buff}) {
         my $tf_handle;
+        
+        # if this fails, we're done, so return undef
         return unless $tf_handle = shift @{ $self->{sortfiles}[-1] };
+
         seek($tf_handle, 0, 0);
         my $out_buff = Sort::External::Buffer->_new(
             tf_handle => $tf_handle,
-            linesep   => $self->{linesep},
-            );
-        
+        );
         $self->{out_buff} = $out_buff;
-        ### HACK!
-        $self->{item_cache} = $out_buff->{buffarray};
+        $self->{item_cache} = $out_buff->{buffarray}; # HACK!
+
+        # loop back, now that the buffer's set up
         return $self->fetch;
     }
 }
 
-##############################################################################
-### Flush the items in the input cache to a tempfile, sorting as we go.
-##############################################################################
+# flush the items in the input cache to a tempfile, sorting as we go
 sub _write_item_cache_to_tempfile {
     my $self = shift;
     my $item_cache = $self->{item_cache};
@@ -207,41 +187,37 @@ sub _write_item_cache_to_tempfile {
 
     return unless @$item_cache;
 
-    ### Get a new tempfile
+    # get a new tempfile
     my $tmp = File::Temp->new(
         DIR => $self->{workdir},
         UNLINK => 1,
     );  
     push @{ $self->{sortfiles}[0] }, $tmp;
 
-    ### Sort the cache.
+    # sort the cache
     @$item_cache = defined $sortsub ?
                    (sort $sortsub @$item_cache) :
                    (sort @$item_cache);
 
-    ### Print the sorted cache to the tempfile.
-    my $printbuff = join $self->{linesep}, @$item_cache;
-    print $tmp $printbuff, $self->{linesep} 
-        or croak("Print to $tmp failed: $!");
+    # print the sorted cache to the tempfile
+    _print_to_sortfile( $tmp, @$item_cache ); 
+    seek($tmp, 0, 0);
     
-    ### Reset variables.
+    # reset variables
     $self->{mem_bytes} = 0;
     $self->{item_cache} = [];
 
-    ### Consolidate once every 10 tempfiles.
+    # consolidate once every MAX_SORTFILES tempfiles.
     $self->_consolidate_sortfiles
-        if @{ $self->{sortfiles}[0] } >= 10;
+        if @{ $self->{sortfiles}[0] } >= MAX_SORTFILES;
 }       
 
-##############################################################################
-### Consolidate sortfiles by interleaving their contents.
-##############################################################################
+# consolidate sortfiles by interleaving their contents.
 sub _consolidate_sortfiles {
     my $self = shift;
     my $final = shift || '';
 
-    ### If we've never flushed the cache to disk, perform the final sort in
-    ### memory.
+    # if we've never flushed the cache, perform the final sort in memory
     if ($final and !@{ $self->{sortfiles}[-1] }) {
         my $item_cache = $self->{item_cache};
         my $sortsub = $self->{-sortsub};
@@ -251,44 +227,40 @@ sub _consolidate_sortfiles {
         return;
     }
     
-    ### Higher levels of the sortfiles array have been through more
-    ### stages of consolidation.  
-    ###
-    ### If this is the last sort, we need to end up with one final group of 
-    ### sorted files (which, if concatenated, would create one giant 
-    ### sortfile).
-    ### 
-    ### The final sort is available as an array of filehandles: 
-    ### @{ $self->{sortfiles}[-1] }
+=begin comment
+
+Each element of the sortfiles array is an array of filehandles.  Higher levels
+of the have been through more stages of consolidation. 
+
+If this is the last sort, we need to end up with one final group of sorted
+files (which, if concatenated, would create one giant sortfile).  This final
+sort is available as an array of filehandles: @{ $self->{sortfiles}[-1] }
+
+=end comment
+=cut
+
     $self->_write_item_cache_to_tempfile;
     for my $input_level (0 .. $#{$self->{sortfiles} }) {
         if ($final) {
             $self->_consolidate_one_level($input_level);
         }
-        elsif ( @{ $self->{sortfiles}[$input_level] } >
-            $self->{max_sortfiles}) 
-        {
+        elsif ( @{ $self->{sortfiles}[$input_level] } > MAX_SORTFILES) {
             $self->_consolidate_one_level($input_level);
         }
     }
 }
 
-##############################################################################
-### Do the hard work for _consolidate_sortfiles().
-##############################################################################
+# merge multiple sortfiles
 sub _consolidate_one_level {
     my $self = shift;
     my $input_level = shift;
     
     my $sortsub = $self->{-sortsub};
-    my $linesep = $self->{linesep};
-    local $/ = $linesep;
     
-    ### Create a holder for the output filehandles if necessary.
+    # create a holder for the output filehandles if necessary.
     $self->{sortfiles}[$input_level + 1] ||= [];
 
-    ### If there's only one sortfile in this level, kick it up to the next
-    ### level.
+    # if there's only one sortfile on this level, kick it up and return
     if (@{ $self->{sortfiles}[$input_level] } == 1) {
         push @{ $self->{sortfiles}[$input_level + 1] }, 
             @{ $self->{sortfiles}[$input_level] };
@@ -296,21 +268,17 @@ sub _consolidate_one_level {
         return;
     }
 
-    my @outfiles;
-    ### Get a new outfile
+    # get a new outfile
     my $outfile = File::Temp->new(
         DIR => $self->{workdir}, 
         UNLINK  => 1
-        );
-    push @outfiles, $outfile;
-    my $outfile_length = 0;
+    );
     
-    ### Build an array of Sort::External::Buffer objects, one per filehandle.
+    # build an array of Sort::External::Buffer objects, one per filehandle
     my @in_buffers;
     for my $tf_handle (@{ $self->{sortfiles}[$input_level] }) {
         seek($tf_handle, 0, 0);
         my $buff = Sort::External::Buffer->_new(
-            linesep     => $self->{linesep},
             tf_handle   => $tf_handle,
         );
         push @in_buffers, $buff;
@@ -319,7 +287,7 @@ sub _consolidate_one_level {
     BIGBUFF: while (@in_buffers) {
         my @on_the_bubble;
 
-        ### Discard exhausted buffers.
+        # discard exhausted buffers, collect endposts
         my @buffer_buffer;
         for my $buff (@in_buffers) {
             next unless $buff->_refill_buffer;
@@ -329,36 +297,55 @@ sub _consolidate_one_level {
         last unless @buffer_buffer;
         @in_buffers = @buffer_buffer;
 
-        ### Each Buffer object holds a partial slice of the items in its
-        ### sortfile.  
-        ### We're going to put as many items into the batch to be sorted this
-        ### loop iteration as we can.  To do so, we need to examine the end of
-        ### each slice, and figure out which of these endposts is the lowest
-        ### in sort order.  Once we know that endpost, we can compare all the
-        ### other items in the other buffers, and if they are lower in sort
-        ### order than the endpost, they get let through into the batch.
+=begin comment
+
+Our goal is to merge multiple sortfiles, but we don't have access to all the
+elements in a given sortfile, only to Buffer objects which allow us to "see"
+a limited subset of those elements.  
+
+A traditional way to merge several files is to expose one element per file,
+compare them, and pop one item per pass.  However, it is more efficient,
+especially in Perl, if we sort batches.
+
+It would be convenient if we could just dump all the buffered elements into a
+batch and sort that, but we can't just pool all the buffers, because it's
+possible that the elements in buffer B are all higher in sort order than all
+the elements we can "see" in buffer A, plus some more elements in sortfile A
+we can't "see" yet.  We need a gatekeeper algo which allows the maximum number
+of elements into a sortbatch, while blocking elements which we can't be
+certain belong in this sortbatch.
+
+Our gatekeeper needs to know a cutoff point.  To find it, we need to examine
+the last element we can "see" in each buffer, and figure out which of these
+endposts is the lowest in sort order.  Once we know that cutoff, we can
+compare it against items in the other buffers, and any element which is lower
+than or equal to the cutoff in sort order gets let through into the batch.
+
+=end comment
+=cut
+
         @on_the_bubble = $sortsub ?
                          (sort $sortsub @on_the_bubble) :
                          (sort @on_the_bubble);
-        my $thresh = $on_the_bubble[-1];
-        ### Produce a sub on the fly that can be used to compare elements to
-        ### the endpost.
+        my $cutoff = $on_the_bubble[-1];
+
+        # create a closure sub that compares an arg to the cutoff
         my $comparecode;
         if (defined $sortsub) {
             $comparecode = sub {
                 my $test = shift;
-                return 0 if $test eq $thresh;
-                my $winner = (sort $sortsub($thresh, $_[0]))[0];
-                return $winner eq $thresh ? 1 : -1;
+                return 0 if $test eq $cutoff;
+                my $winner = (sort $sortsub($cutoff, $_[0]))[0];
+                return $winner eq $cutoff ? 1 : -1;
             }
         }
         else {
             $comparecode = sub {
-                return $_[0] cmp $thresh;
+                return $_[0] cmp $cutoff;
             }
         }
 
-        ### Build the batch.
+        # build the batch
         my @batch;
         for my $buff (@in_buffers) {
             $buff->_define_range($comparecode);
@@ -368,63 +355,43 @@ sub _consolidate_one_level {
 
         }
         
-        ### Sort the batch and print it to an outfile, opening a new outfile
-        ### if necessary.
+        # sort the batch and print it to an outfile
         @batch = $sortsub ? (sort $sortsub @batch) : (sort @batch);
-        my $outbuffer = join $linesep, @batch;
-        $outfile_length += bytes::length($outbuffer) + 16;
-        if ($outfile_length > MAX_FS) {
-            $outfile = File::Temp->new(
-                DIR => $self->{workdir},
-                UNLINK  => 1
-                );
-            push @outfiles, $outfile;
-            $outfile_length = 
-                bytes::length($outbuffer) + 16;
-        }
-        print $outfile $outbuffer, $linesep;
+        _print_to_sortfile( $outfile, @batch ); 
     }
             
-    ### Explicity close the filehandles that were consolidated; since they're
-    ### tempfiles, they'll unlink themselves.
+    # explicity close the filehandles that were consolidated; since they're
+    # tempfiles, they'll unlink themselves
     close $_ for @{ $self->{sortfiles}[$input_level] };
     $self->{sortfiles}[$input_level] = [];
     
-    ### Add the filehandle for the outfile(s) to the next higher level of the
-    ### sortfiles array.
+    # add the filehandle for the outfile to the next higher level of the
+    # sortfiles array
+    seek($outfile, 0, 0);
     push @{ $self->{sortfiles}[$input_level + 1] }, 
-        @outfiles;
-    ### If there's more than one outfile, we're exceeding the 
-    ### max filesize limit.  Increase the maximum number of files required 
-    ### to trigger a sort, so that we don't sort endlessly.
-    $self->{max_sortfiles} += ($#outfiles);
+        $outfile;
 }
 
 package Sort::External::Buffer;
 use strict;
 use warnings;
 
-### This is a helper class with no public interface.  
-### Do not use it on its own.
+=begin comment
+
+This is a helper class with no public interface.  
+Do not use it on its own.
+
+=end comment
+=cut
 
 use Clone 'clone';
-
-##############################################################################
-### Class defaults
-##############################################################################
 
 our %class_defaults = (
     buffarray    => [],
     max_in_range => -1,
-    read_buffer  => undef,
-    read_pos     => 0,
     tf_handle    => undef,
-    linesep      => undef,
     );
 
-##############################################################################
-### Constructor
-##############################################################################
 sub _new {
     my $class = shift;
     my $self = clone(\%class_defaults);
@@ -432,72 +399,16 @@ sub _new {
     bless $self, $class;
 }
 
-##############################################################################
-### Read items out a temp file and into an array.
-##############################################################################
-sub _refill_buffer {
-    my $self = shift;
-    my $tf_handle = $self->{tf_handle};
-    my $buffarray = $self->{buffarray};
-    local $/ = $self->{linesep};
-
-    ### Read data in 32k chunks.
-    ### Strangely, bigger chunks can hinder performance.
-    ###
-    ### Keep reading in 32k chunks until at least one complete line is in the
-    ### buffarray (in case the lines are really long). 
-    my $starter = 1; 
-    while (@$buffarray < 2 or $starter) {
-        seek($tf_handle, $self->{read_pos}, 0);
-        my $offset = defined $self->{read_buffer} ? 
-            bytes::length($self->{read_buffer}) : 0;
-        if ($offset < 2**15) {
-            read($tf_handle, $self->{read_buffer}, 2**15, $offset);
-            $self->{read_pos} += 2**15;
-        }
-        ### The -1 is crucial.
-        push @$buffarray, 
-            (split $self->{linesep}, $self->{read_buffer}, -1);
-        ### If the end of the read buffer was aligned with a linesep, 
-        ### The last item is an empty string.  If it wasn't, then it's
-        ### a partial item.  In either case, we put it back in the
-        ### read_buffer.
-        $self->{read_buffer} = pop @$buffarray;
-        
-        $offset = defined $self->{read_buffer} ? 
-            bytes::length($self->{read_buffer}) : 0;
-        seek($tf_handle, $self->{read_pos}, 0);
-        if(read($tf_handle, $self->{read_buffer}, 2**15, $offset)) {
-            $self->{read_pos} += 2**15;
-        }
-        ### If the read failed, but there's data in the buffer, it's
-        ### the last line, so move it to the cache.
-        elsif ($offset) {
-            chomp $self->{read_buffer};
-            push @$buffarray, $self->{read_buffer};
-            $self->{read_buffer} = undef;
-            last;
-        }
-        else {
-            last;
-        }
-        $starter = 0; 
-    }
-    ### Indicate whether the attempt to refill the buffer was successful.
-    return scalar @$buffarray;
-}
-
-##############################################################################
-### Determine the highest item in the buffarray that is still lower than a
-### given endpost.
-##############################################################################
+# record the highest index in the buffarray representing an element lower than
+# a given cutoff.
 sub _define_range {
     my $self = shift;
     my $comparecode = shift;
     my $buffarray = $self->{buffarray};
     my $top = 0;
     my $tail = $#$buffarray;
-    ### work outwards from the middle.  Divide and conquer.
+
+    # divide and conquer
     while ($tail - $top > 1) {
         my $test = int(($tail + $top + 1)/2);
         my $result = &$comparecode($buffarray->[$test]);
@@ -511,16 +422,20 @@ sub _define_range {
             $top = $tail = $test;
         }
     }
-    ### Get that last item in...
+
+    # get that last item in...
     while ($top < $#$buffarray and &$comparecode($buffarray->[$top + 1]) < 1){
         $top++;
     }
-    ### Check to see if ALL of the array elements are outside the range.
+
+    # check to see if ALL of the array elements are outside the range
     if ($top == 0) {
         if (&$comparecode($buffarray->[0]) == 1) {
             $top = -1;
         }
     }
+
+    # store the index for the last item we'll allow through
     $self->{max_in_range} = $top;
 }
 
@@ -604,14 +519,15 @@ amount of memory consumed by the input cache exceeds a certain number of
 bytes.
 
 There are two important caveats to keep in mind about -mem_threshold.  First,
-Sort::External uses L<Devel::Size|Devel::Size> to assess memory consumption,
-which tends to underestimate real memory consumption somewhat -- see the docs
-for details.  Second, the amount of memory consumed by the Sort::External
-process will be no less than double what you set for -mem_threshold, and
-probably considerably more.  Don't get too aggressive, because the only time
-a very high -mem_threshold provides outsized benefits is when it's big enough
-that it prevents a disk flush -- in which case, you might just want to use
-sort(). 
+Sort::External uses an extremely crude algorithm to assess memory consumption:
+the length of each scalar in bytes, plus an extra 15 per item to account for
+the overhead of a typical scalar.  This is by no means accurate, but it
+provides a meaningful level of control.  Second, the amount of memory consumed
+by the Sort::External process will be no less than double what you set for
+-mem_threshold, and probably considerably more.  Don't get too aggressive,
+because the only time a very high -mem_threshold provides outsized benefits is
+when it's big enough that it prevents a disk flush -- in which case, you might
+just want to use sort(). 
 
 =head1 METHODS
 
@@ -623,7 +539,7 @@ sort().
         -working_dir     => $temp_directory,  # default: see below
         -mem_threshold   => 2 ** 24,          # default: 0 (inactive)
         -cache_size      => 100_000,          # default: 10_000
-        );
+    );
 
 Construct a Sort::External object.
 
@@ -665,15 +581,15 @@ for occasional pauses to occur as caches are flushed and sortfiles are merged.
 
 =head2 finish() 
 
-    ### if you intend to call fetch...
+    # if you intend to call fetch...
     $sortex->finish; 
     
-    ### otherwise....
+    # otherwise....
     use Fcntl;
     $sortex->finish( 
         -outfile => 'sorted.txt',
         -flags => (O_CREAT | O_WRONLY),
-        );
+    );
 
 Prepare to output items in sorted order.
 

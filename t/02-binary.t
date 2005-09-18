@@ -9,7 +9,7 @@ use Sort::External;
 
 my ($sortex, $item, @sorted);
 
-my @orig = map { sprintf("%05d", $_) } ( 0 .. 11_000);
+my @orig = map { pack('N', $_) } ( 0 .. 11_000);
 unshift @orig, '';
 my @reversed = reverse @orig;
 

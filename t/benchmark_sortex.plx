@@ -6,6 +6,9 @@ use Carp;
 use Benchmark qw( :hireswallclock );
 use Sort::External;
 
+croak("usage: ./benchmark_sortex.plx REPS")
+    unless @ARGV;
+
 my $version = $Sort::External::VERSION;
 $version =~ s/_.*//;
 
@@ -33,7 +36,7 @@ if ($version > 0.06) {
         = \&mem_thresh_hit_disk_all_at_once;
 }
 
-timethese( 300, \%timeable);
+timethese( $ARGV[0], \%timeable);
 print "Sort::External version $Sort::External::VERSION\n";
 
 sub test_one_by_one {

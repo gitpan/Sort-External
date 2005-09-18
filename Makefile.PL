@@ -11,7 +11,6 @@ WriteMakefile(
     PREREQ_PM => {
         'Test::More'  => 0,
         'File::Temp'  => 0.14,
-        'Devel::Size' => 0.63,
         'Clone'       => 0,
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
