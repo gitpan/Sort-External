@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.11_1';
+our $VERSION = '0.11';
 
 require XSLoader;
 XSLoader::load('Sort::External', $VERSION);
@@ -619,7 +619,7 @@ L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Sort-External>.
 
 Bug reports and patches: Ken Clarke, Chris Nandor.
 
-=head2 SEE ALSO
+=head1 SEE ALSO
 
 The L<Sort::External::Cookbook|Sort::External::Cookbook>.
 
