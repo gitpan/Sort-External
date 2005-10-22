@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 
 require XSLoader;
 XSLoader::load('Sort::External', $VERSION);
@@ -247,6 +247,7 @@ sort is available as an array of filehandles: @{ $self->{sortfiles}[-1] }
         elsif ( @{ $self->{sortfiles}[$input_level] } > MAX_SORTFILES) {
             $self->_consolidate_one_level($input_level);
         }
+
     }
 }
 
@@ -290,7 +291,9 @@ sub _consolidate_one_level {
         # discard exhausted buffers, collect endposts
         my @buffer_buffer;
         for my $buff (@in_buffers) {
-            next unless $buff->_refill_buffer;
+            if (!@{ $buff->{buffarray} }) {
+                next unless $buff->_refill_buffer;
+            }
             push @on_the_bubble, $buff->{buffarray}[-1];
             push @buffer_buffer, $buff;
         }
@@ -327,7 +330,7 @@ than or equal to the cutoff in sort order gets let through into the batch.
         @on_the_bubble = $sortsub ?
                          (sort $sortsub @on_the_bubble) :
                          (sort @on_the_bubble);
-        my $cutoff = $on_the_bubble[-1];
+        my $cutoff = $on_the_bubble[0];
 
         # create a closure sub that compares an arg to the cutoff
         my $comparecode;
@@ -335,7 +338,7 @@ than or equal to the cutoff in sort order gets let through into the batch.
             $comparecode = sub {
                 my $test = shift;
                 return 0 if $test eq $cutoff;
-                my $winner = (sort $sortsub($cutoff, $_[0]))[0];
+                my $winner = (sort $sortsub($cutoff, $test))[0];
                 return $winner eq $cutoff ? 1 : -1;
             }
         }
@@ -402,41 +405,29 @@ sub _new {
 # record the highest index in the buffarray representing an element lower than
 # a given cutoff.
 sub _define_range {
-    my $self = shift;
-    my $comparecode = shift;
+    my ($self, $comparecode) = @_;
     my $buffarray = $self->{buffarray};
-    my $top = 0;
-    my $tail = $#$buffarray;
+    my ($lo, $mid, $hi) = (0, 0, $#$buffarray);
 
     # divide and conquer
-    while ($tail - $top > 1) {
-        my $test = int(($tail + $top + 1)/2);
-        my $result = &$comparecode($buffarray->[$test]);
-        if ($result == -1) {
-            $top = $test;
-        }
-        elsif ($result == 1) {
-            $tail = $test;
-        }
-        elsif ($result == 0) {
-            $top = $tail = $test;
-        }
+    while ($hi - $lo > 1) {
+        $mid = ($lo + $hi) >> 1;
+        my $delta = &$comparecode($buffarray->[$mid]);
+        if    ($delta == -1) { $lo = $mid  }
+        elsif ($delta == 1 ) { $hi = $mid  }
+        elsif ($delta == 0 ) { $lo = $hi = $mid }
     }
 
     # get that last item in...
-    while ($top < $#$buffarray and &$comparecode($buffarray->[$top + 1]) < 1){
-        $top++;
+    while ($mid < $#$buffarray and &$comparecode($buffarray->[$mid + 1]) < 1){
+        $mid++;
     }
-
-    # check to see if ALL of the array elements are outside the range
-    if ($top == 0) {
-        if (&$comparecode($buffarray->[0]) == 1) {
-            $top = -1;
-        }
+    while ($mid >= 0 and $comparecode->($buffarray->[$mid]) == 1) {
+        $mid--;
     }
 
     # store the index for the last item we'll allow through
-    $self->{max_in_range} = $top;
+    $self->{max_in_range} = $mid;
 }
 
 1;

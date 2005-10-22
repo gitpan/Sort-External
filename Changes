@@ -1,5 +1,8 @@
 Revision history for Sort-External
 
+0.12    2005-10-21
+        Fixed intermittent bug in gatekeeper algo which produced bad sorts
+
 0.11    2005-09-17
         5-40% speed improvement, depending on config
         Now an XS module (it already had XS dependencies)

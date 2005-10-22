@@ -83,8 +83,11 @@ CODE:
 
     SV* buffarr_ref  = *(hv_fetch(obj_hash, "buffarray", 9, 0));
     AV* buffarray_av = (AV*)SvRV(buffarr_ref);
-
+/*
     char  buf_buf[32768];
+    */
+    char*  buf_buf;
+    New(0, buf_buf, 32768, char);
     char* read_buf = buf_buf;
     char* num_buf  = buf_buf;
     
@@ -92,6 +95,9 @@ CODE:
     STRLEN amount_read = 0;
     int check;
     int num_items = 0;
+    STRLEN filename_len = SvLEN(handle_ref);
+    char* filename = SvPV(handle_ref, filename_len);
+    
     
 
     while (1) {
@@ -105,10 +111,11 @@ CODE:
             check_io_error(check);
             if (check == 0)
                 break;
+            amount_read++;
+
             item_length = (item_length << 7) | (*read_buf & 0x7f);
             if ((U8)(*read_buf) < 0x80)
                 break; 
-            amount_read++;
         }
         if (PerlIO_eof(fh))
             break;
