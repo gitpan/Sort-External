@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 
 require XSLoader;
 XSLoader::load('Sort::External', $VERSION);

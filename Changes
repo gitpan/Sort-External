@@ -1,4 +1,6 @@
 Revision history for Sort-External
+0.13    2005-10-31
+        Fixed compilation problems for pre-c99 compilers.
 
 0.12    2005-10-21
         Fixed intermittent bug in gatekeeper algo which produced bad sorts
