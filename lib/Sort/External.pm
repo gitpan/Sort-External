@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.13';
+our $VERSION = '0.14';
 
 require XSLoader;
 XSLoader::load('Sort::External', $VERSION);
@@ -28,7 +28,7 @@ our %instance_vars = (
     -mem_threshold          => 0, 
     -verbosity              => 1,
     
-    # cleaned up versions of -working_dir and -line_separator
+    # cleaned up version of -working_dir
     workdir                 => undef,
     # storage area used by both feed and fetch
     item_cache              => [],
@@ -608,7 +608,7 @@ L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Sort-External>.
 
 =head1 ACKNOWLEDGEMENTS
 
-Bug reports and patches: Ken Clarke, Chris Nandor.
+Bug reports and patches: Ken Clarke, Chris Nandor, Alessandro Ranellucci.
 
 =head1 SEE ALSO
 

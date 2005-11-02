@@ -153,6 +153,7 @@ CODE:
         amount_read += item_length;
         num_items++;
     }
+    Safefree(buf_buf);
     RETVAL = newSViv(num_items);
 }
     OUTPUT:
