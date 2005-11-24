@@ -4,7 +4,7 @@ use warnings;
 
 require 5.006_001;
 
-our $VERSION = '0.14';
+our $VERSION = '0.15_1';
 
 require XSLoader;
 XSLoader::load('Sort::External', $VERSION);
@@ -487,27 +487,15 @@ unpredictable and almost never desirable when you feed it either undefs or
 refs.  If you really care about sorting lists containing undefs or refs,
 you'll have to symbollically replace and restore them yourself.
 
-=head2 Subtle changes to scalars e.g. utf8 flags get stripped
-
-Once the input cache grows large enough, Sort::External writes items to disk
-and throws them away, only to recreate them later by reading back from disk.
-Provided that the sort does not complete in-memory, the stringified return
-scalars you get back from Sort::External will have changed in one subtle
-respect from their precursors: if they were tagged as utf8 before, they won't
-be now. (There are other subtle changes, but they don't matter unless you're
-working at the L<perlguts|perlguts> level, in which case you know what to
-expect.)
-
 =head2 Memory management
 
 Sort::External functions best when it can accumulate a large input cache
 before sorting the cache and flushing it to disk.  For backwards
 compatibility, the default trigger for a buffer flush is the accumulation of
-10,000 array items, which may be too high if your items are large.  However,
-starting at version 0.10, Sort::External implements -mem_threshold, an
-*experimental* feature which makes it possible to flush to disk when the
-amount of memory consumed by the input cache exceeds a certain number of
-bytes.
+10,000 array items, which may be too high if your items are large.  The
+recommended configuration, however, is to specify -mem_threshold, which makes
+it possible to flush to disk when the amount of memory consumed by the input
+cache exceeds a certain number of bytes.
 
 There are two important caveats to keep in mind about -mem_threshold.  First,
 Sort::External uses an extremely crude algorithm to assess memory consumption:
@@ -515,10 +503,12 @@ the length of each scalar in bytes, plus an extra 15 per item to account for
 the overhead of a typical scalar.  This is by no means accurate, but it
 provides a meaningful level of control.  Second, the amount of memory consumed
 by the Sort::External process will be no less than double what you set for
--mem_threshold, and probably considerably more.  Don't get too aggressive,
-because the only time a very high -mem_threshold provides outsized benefits is
-when it's big enough that it prevents a disk flush -- in which case, you might
-just want to use sort(). 
+-mem_threshold, and probably considerably more. 
+
+=head2 Taint and UTF-8 flags
+
+Expert note: The taint and UTF8 flags are preserved in the stringified return
+scalars.
 
 =head1 METHODS
 
@@ -552,9 +542,9 @@ tempdir() command.
 
 =item 
 
-B<-mem_threshold> -- EXPERIMENTAL FEATURE.  Allow the input cache to grow to
--mem_threshold bytes before sorting it and flushing to disk.  Suggested value:
-Start somewhere between 2**20 and 2**24: 1-16 Mb.
+B<-mem_threshold> -- Allow the input cache to grow to -mem_threshold bytes
+before sorting it and flushing to disk.  Suggested value: Start somewhere
+between 2**20 and 2**24: 1-16 Mb.
 
 =item 
 

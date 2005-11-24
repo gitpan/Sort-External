@@ -1,5 +1,8 @@
 Revision history for Sort-External
 
+0.15    2005-11-23
+        Now preserves taint and utf8 flags.
+
 0.14    2005-11-01
         Fixed a memory leak.
 
