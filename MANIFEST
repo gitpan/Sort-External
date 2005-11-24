@@ -3,14 +3,15 @@ External.xs
 lib/Sort/External.pm
 lib/Sort/External/Cookbook.pm
 Makefile.PL
-MANIFEST
-META.yml			# Will be created by "make dist"
+MANIFEST			This list of files
+META.yml
 ppport.h
 README
 t/00-load.t
 t/01-simplesort.t
 t/02-binary.t
 t/03-long_items.t
-t/benchmark_sortex.plx
+t/04-metadata.t
+t/05-types.t
 t/pod-coverage.t
 t/pod.t

@@ -1,7 +1,10 @@
 Revision history for Sort-External
 
-0.15    2005-11-23
+0.15    2005-11-24
         Now preserves taint and utf8 flags.
+        Explicitly forbid refs rather than fail with an IO error.
+        -mem_threshold now the default flush trigger mechanism.
+        -line_separator removed
 
 0.14    2005-11-01
         Fixed a memory leak.

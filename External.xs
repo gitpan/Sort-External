@@ -7,13 +7,6 @@
 #define SORTEX_UTF8_FLAG 0x1
 #define SORTEX_TAINTED_FLAG 0x2
 
-/* throw an error if a supplied check_val comes up negative */
-void 
-check_io_error(int check) {
-    if (check < 0) 
-        croak("PerlIO failed: errno %d", errno);
-}
-
 MODULE = Sort::External		PACKAGE = Sort::External		
 
 PROTOTYPES: DISABLE
@@ -27,9 +20,9 @@ Return a rough estimate of the memory occupied by the arguments.
 SV*
 _add_up_lengths (...)
 PREINIT:
-    UV sum;
-    int i;
-    SV *element;
+    UV   sum;
+    int  i;
+    SV  *element;
 CODE:
 {
     sum = 0;
@@ -43,8 +36,7 @@ CODE:
 
     RETVAL = newSVuv(sum);
 }
-OUTPUT:
-    RETVAL
+OUTPUT: RETVAL
 
 =for comment
 
@@ -57,25 +49,34 @@ SV*
 _print_to_sortfile (fh, ...)
     PerlIO *fh;
 PREINIT:
-    SV *thing_sv;
-    int i, check;
-    char buf_buf[5];
-    char *string, *buf, *end_of_buf, *encoded_len;
-    STRLEN string_len;
-    UV aUV;
-    char flags;
+    SV       *scratch_sv;   
+    int		  i;
+    int		  check;        /* check value for i/o ops */
+    int       type;         /* the type of an SV */
+    char     *string;       /* pointer to the string in an SV */
+    char      num_buf[5];   /* buffer to hold compressed integer */
+    char     *end_of_buf;   /* remember the end of the buffer */
+    char     *encoded_len;  /* used when encoding compressed integer */
+    STRLEN    string_len;
+    UV        aUV;
+    char      flags;        /* status flags */
 PPCODE:
 {
-    /* create a buffer to hold the compressed integer */
-    buf = buf_buf;
-    end_of_buf = buf + 5;
+    /* prepare a to hold the compressed integer */
+    end_of_buf = num_buf + 5;
     
     for (i = 1; i < items; i++) {
         /* retrieve one scalar from the Perl stack */
-        thing_sv   = ST(i);
-        string_len = SvCUR(thing_sv);
+        scratch_sv   = ST(i);
+        string_len = SvCUR(scratch_sv);
         aUV        = string_len;
-        string     = SvPV(thing_sv, string_len);
+        string     = SvPV(scratch_sv, string_len);
+
+        /* throw an error if the item isn't a plain old scalar */
+        type = SvTYPE(scratch_sv);
+        if (type > SVt_PVMG || type == SVt_RV) {
+            croak("can't handle anything other than plain scalars");
+        }
         
         /* encode the length of the scalar as a BER compressed integer */
         encoded_len = end_of_buf;
@@ -87,20 +88,27 @@ PPCODE:
 
         /* record utf8 and taint status */
         flags = 0;
-        if (SvUTF8(thing_sv)) {
+        if (SvUTF8(scratch_sv)) {
             flags |= SORTEX_UTF8_FLAG;
         }
-        if (SvTAINTED(thing_sv)) {
+        if (SvTAINTED(scratch_sv)) {
             flags |= SORTEX_TAINTED_FLAG;
         }
 
         /* print len . string . flags to fh */
         check = PerlIO_write(fh, encoded_len, (end_of_buf - encoded_len));
-        check_io_error(check);
+        if (check < 0) {
+            croak("PerlIO failed: errno %d", errno);
+        }
         check = PerlIO_write(fh, string, string_len);
-        check_io_error(check);
+        if (check != string_len) {
+            croak("PerlIO failed: tried to write %"UVuf" bytes, wrote %d",
+                (UV)string_len, check);
+        }
         check = PerlIO_write(fh, &flags, 1);
-        check_io_error(check);
+        if (check != 1) {
+            croak("PerlIO failed: errno %d", errno);
+        }
     }
 }
 
@@ -116,24 +124,23 @@ SV*
 _refill_buffer (obj_hash, ...)
     HV *obj_hash;
 PREINIT:
-    SV *handle_ref, *buffarr_ref;
-    PerlIO *fh;
-    AV *buffarray_av;
-    char num_buf[5];
-    char *read_buf;
-    UV item_length;
-    STRLEN amount_read;
-    int check, num_items;
-    SV* aSV;
-    char flags;
+    SV*       scratch_sv;
+    PerlIO   *fh;           /* the object's tempfile handle */
+    AV       *buffarray_av; /* the object's buffer array of items */
+    char      num_buf[5];   /* buffer to hold compressed integer */
+    char     *read_buf;     /* scratch pointer */
+    UV        item_length;  /* length of a recovered SV */
+    STRLEN    amount_read;  /* number of bytes we've read off disk */
+    int       num_items;    /* number of items we've recovered */
+    int		  check;        /* check value for i/o ops */
+    char      flags;        /* status flags */
 CODE:
 {
     /* extract filehandle and buffer array from object */   
-    handle_ref = *(hv_fetch( obj_hash, "tf_handle", 9, 0 ));
-    fh         = IoIFP( sv_2io(handle_ref) );
-    buffarr_ref  = *(hv_fetch( obj_hash, "buffarray", 9, 0 ));
-    buffarray_av = (AV*)SvRV(buffarr_ref);
-
+    scratch_sv = *(hv_fetch( obj_hash, "tf_handle", 9, 0 ));
+    fh         = IoIFP( sv_2io(scratch_sv) );
+    scratch_sv  = *(hv_fetch( obj_hash, "buffarray", 9, 0 ));
+    buffarray_av = (AV*)SvRV(scratch_sv);
 
     amount_read = 0;
     num_items   = 0;
@@ -147,9 +154,12 @@ CODE:
         while (1) {
             read_buf = num_buf;
             check = PerlIO_read(fh, read_buf, 1);
-            check_io_error(check);
-            if (check == 0)
+            if (check < 0) {
+                croak("PerlIO failed: errno %d", errno);
+            }
+            else if (check == 0) {
                 break;
+            }
             amount_read++;
             item_length = (item_length << 7) | (*read_buf & 0x7f);
             if ((U8)(*read_buf) < 0x80)
@@ -161,10 +171,10 @@ CODE:
             break;
 
         /* recover the stringified scalar from disk */
-        aSV = newSV(item_length + 1);
-        SvCUR_set(aSV, item_length);
-        SvPOK_on(aSV);
-        read_buf = SvPVX(aSV);
+        scratch_sv = newSV(item_length + 1);
+        SvCUR_set(scratch_sv, item_length);
+        SvPOK_on(scratch_sv);
+        read_buf = SvPVX(scratch_sv);
         check = PerlIO_read(fh, read_buf, item_length);
         if (check < item_length) {
             croak("PerlIO error: read %d bytes, expected %"UVuf" bytes", 
@@ -173,16 +183,18 @@ CODE:
 
         /* restore utf8 and tainted flags */
         check = PerlIO_read(fh, &flags, 1);
-        check_io_error(check);
+        if (check < 1) {
+            croak("PerlIO failed: errno %d", errno);
+        }
         if (flags & SORTEX_UTF8_FLAG) {
-            SvUTF8_on(aSV);
+            SvUTF8_on(scratch_sv);
         }
         if (flags & SORTEX_TAINTED_FLAG) {
-            SvTAINTED_on(aSV);
+            SvTAINTED_on(scratch_sv);
         }
 
         /* add to the buffarray */
-        av_push(buffarray_av, aSV);
+        av_push(buffarray_av, scratch_sv);
 
         /* track how much we've read so far */
         amount_read += item_length;
@@ -191,6 +203,5 @@ CODE:
 
     RETVAL = newSViv(num_items);
 }
-OUTPUT:
-    RETVAL
+OUTPUT: RETVAL
 
