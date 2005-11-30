@@ -68,9 +68,8 @@ PPCODE:
     for (i = 1; i < items; i++) {
         /* retrieve one scalar from the Perl stack */
         scratch_sv   = ST(i);
-        string_len = SvCUR(scratch_sv);
-        aUV        = string_len;
         string     = SvPV(scratch_sv, string_len);
+        aUV        = string_len;
 
         /* throw an error if the item isn't a plain old scalar */
         type = SvTYPE(scratch_sv);

@@ -4,7 +4,7 @@ use warnings;
 
 use 5.006_001;
 
-our $VERSION = '0.15_2';
+our $VERSION = '0.15';
 
 use XSLoader;
 XSLoader::load('Sort::External', $VERSION);
@@ -449,11 +449,12 @@ punchcards, or any storage medium except RAM -- hence, this module's name.
 =head2 Stringification
 
 Items fed to Sort::External will be returned in stringified form (assuming
-that the cache gets flushed at least once): C<$foo = "$foo";>
+that the cache gets flushed at least once): C<$foo = "$foo">.  Since this is
+unlikely to be desirable when objects or deep data structures are involved,
+Sort::External throws an error if you feed it anything other than simple
+scalars.   
 
-Since this is unlikely to be desirable when objects or deep data structures
-are involved, Sort::External throws an error if you feed it anything other
-than simple scalars.   
+=head2 Taint and UTF-8 flags
 
 Expert: Sort::External does a little extra bookkeeping to sustain each item's
 taint and UTF-8 flags through the journey to disk and back.
