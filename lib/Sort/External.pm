@@ -4,7 +4,7 @@ use warnings;
 
 use 5.006_001;
 
-our $VERSION = '0.15';
+our $VERSION = '0.16';
 
 use XSLoader;
 XSLoader::load('Sort::External', $VERSION);
@@ -21,6 +21,7 @@ our %instance_vars = (
     -working_dir   => undef,
     -cache_size    => undef,
     -mem_threshold => 2**20,
+    -line_separator => undef, # no-op, backwards compatibility only
 
     # cleaned up version of -working_dir
     workdir => undef,

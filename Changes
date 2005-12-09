@@ -1,5 +1,8 @@
 Revision history for Sort-External
 
+0.16    2005-12-09
+        Restore -line_separator, for backcompat with Search::Kinosearch 0.21
+
 0.15    2005-11-29
         Now preserves taint and utf8 flags.
         Explicitly forbid refs rather than fail with an IO error.
