@@ -1,0 +1,31 @@
+SortExternal*		SORTEX
+SortExRun*		SORTEXRUN
+
+#############################################################################
+INPUT
+
+SORTEX
+    if (sv_derived_from($arg, \"Sort::External\")) {
+        IV tmp = SvIV((SV*)SvRV($arg));
+        $var = INT2PTR(SortExternal*,tmp);
+    }
+    else
+        croak(\"Not a Sort::External\");
+
+SORTEXRUN
+    if (sv_derived_from($arg, \"Sort::External::SortExRun\")) {
+        IV tmp = SvIV((SV*)SvRV($arg));
+        $var = INT2PTR(SortExRun*,tmp);
+    }
+    else
+        croak(\"Not a Sort::External::SortExRun\");
+
+#############################################################################
+OUTPUT
+
+SORTEX
+    sv_setref_pv($arg, \"Sort::External\", (void*)$var);
+
+SORTEXRUN
+    sv_setref_pv($arg, \"Sort::External::SortExRun\", (void*)$var);
+

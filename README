@@ -12,10 +12,9 @@ To install this module, run the following commands:
     make test
     make install
 
+COPYRIGHT AND LICENSE
 
-COPYRIGHT AND LICENCE
-
-Copyright (C) 2005 Marvin Humphrey
+Copyright 2005-2008 Marvin Humphrey
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.
