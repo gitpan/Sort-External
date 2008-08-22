@@ -208,7 +208,7 @@ PROTOTYPES: DISABLE
 
 SV*
 _new(class_name, working_dir, sortsub, cache_size, mem_threshold, tempfile_fh) 
-    const char *class_name;
+    char *class_name;
     SV *working_dir;
     SV *sortsub;
     IV cache_size;
@@ -356,6 +356,13 @@ _print_to_sortfile(self, input_av)
     AV *input_av;
 PPCODE:
     SortEx_print_to_sortfile(self, input_av);
+
+void
+_utf8_on(sv)
+    SV *sv;
+PPCODE:
+    /* Testing only. */
+    SvUTF8_on(sv);
 
 MODULE = Sort::External   PACKAGE = Sort::External::SortExRun
 

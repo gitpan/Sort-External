@@ -1,8 +1,22 @@
+AV *            T_AVREF 
+HV *			T_HVREF
 SortExternal*		SORTEX
 SortExRun*		SORTEXRUN
 
 #############################################################################
 INPUT
+
+T_AVREF
+    if (SvROK($arg) && SvTYPE(SvRV($arg))==SVt_PVAV)
+        $var = (AV*)SvRV($arg);
+    else
+        Perl_croak(aTHX_ \"$var is not an array reference\")
+
+T_HVREF
+	if (SvROK($arg) && SvTYPE(SvRV($arg))==SVt_PVHV)
+	    $var = (HV*)SvRV($arg);
+	else
+	    Perl_croak(aTHX_ \"$var is not a hash reference\")
 
 SORTEX
     if (sv_derived_from($arg, \"Sort::External\")) {
@@ -28,4 +42,10 @@ SORTEX
 
 SORTEXRUN
     sv_setref_pv($arg, \"Sort::External::SortExRun\", (void*)$var);
+
+T_AVREF
+    $arg = newRV((SV*)$var);
+
+T_HVREF
+	$arg = newRV((SV*)$var);
 

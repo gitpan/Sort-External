@@ -31,7 +31,7 @@ for ( 0 .. 10 ) {
         7 + $_, "_define_range with sortsub ($_)" );
 }
 
-$sortex = Sort::External->new( sortsub => sub { $_[1] <=> $_[0] }, );
+$sortex = Sort::External->new( sortsub => sub ($$) { $_[1] <=> $_[0] }, );
 @correct = reverse( 1 .. 100 );
 is_deeply( [ $sortex->_sort( 1 .. 100 ) ],
     \@correct, "_sort with positional args sortsub" );

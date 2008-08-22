@@ -1,10 +1,9 @@
-#!/usr/bin/perl -T
+#!perl -T
 use strict;
 use warnings;
 
 use Test::More tests => 3;
 use File::Spec;
-use Encode qw( _utf8_on );
 
 use lib 'lib';
 use Sort::External;
@@ -14,7 +13,7 @@ my ( $sortex, $item, @sorted );
 my @orig = 'a' .. 'y';
 
 my $valid_utf8 = "z\xf0\x9d\x84\x9e";
-_utf8_on($valid_utf8);
+Sort::External::_utf8_on($valid_utf8);
 push @orig, $valid_utf8;
 
 my @reversed = reverse @orig;
@@ -32,7 +31,6 @@ my $curdir = File::Spec->curdir;
 opendir( CURDIR, $curdir ) or die "couldn't opendir '$curdir': $!";
 my @tainted = readdir CURDIR;
 closedir CURDIR;
-
 ok( is_tainted( $tainted[0] ), "test the test" );
 
 @orig = sort( @orig, @tainted );
