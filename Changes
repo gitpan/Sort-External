@@ -1,5 +1,10 @@
 Revision history for Sort::External
 
+0.18    2008-09-03
+        * Tamp down memory consumption.
+        * Increase default mem_threshold to 8 MiB.
+        * Improve testing reliability under Windows.
+
 0.171   2008-08-22
         * Fix support for Perl 5.6.2.
         * Specify Perl 5.6.2 as a minimum version.

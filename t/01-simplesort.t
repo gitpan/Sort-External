@@ -1,7 +1,20 @@
 use strict;
 use warnings;
 
-use Test::More tests => 9;
+package MySortEx;
+use base qw( Sort::External );
+
+our $called = 0;
+
+sub _consolidate {
+    my $self = shift;
+    $self->SUPER::_consolidate(@_);
+    $called += 1;
+}
+
+package main;
+
+use Test::More tests => 11;
 use File::Spec;
 
 use Sort::External;
@@ -46,32 +59,34 @@ undef $sortex;
 
 $sortex = Sort::External->new( mem_threshold => 2**24 );
 $sortex->feed($_) for @reversed_letters;
-unlink 'sortfile.txt' or 1;
+maybe_remove('sortfile.txt');
 $sortex->finish(
     outfile => 'sortfile.txt',
     flags   => ( O_CREAT | O_WRONLY ),
 );
+undef $sortex;
 open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
 $sort_output = [<SORTFILE>];
 close SORTFILE;
 is_deeply( $sort_output, \@letters,
     "... to an outfile without hitting temp" );
-undef $sortex;
-unlink "sortfile.txt" or 1;    # Stop! or I'll say "stop" again.
+maybe_remove('sortfile.txt');
 
+maybe_remove('sortfile2.txt');
 $sortex = Sort::External->new( cache_size => 2, );
 $sortex->feed($_) for @reversed_letters;
 $sortex->finish(
     outfile => 'sortfile2.txt',
     flags   => ( O_CREAT | O_WRONLY ),
 );
+undef $sortex;
 open SORTFILE, "sortfile2.txt"
     or die "Couldn't open file 'sortfile2.txt': $!";
 $sort_output = [<SORTFILE>];
 is_deeply( $sort_output, \@letters,
     "... to an outfile with a low enough " . "cache setting to hit temp" );
-undef $sortex;
-unlink "sortfile2.txt" or 1;
+close SORTFILE;
+maybe_remove('sortfile2.txt');
 
 $sortex = Sort::External->new( cache_size => 2, );
 $sortex->feed($_) for @reversed_letters;
@@ -79,12 +94,13 @@ $sortex->finish(
     outfile => 'sortfile.txt',
     flags   => ( O_CREAT | O_WRONLY ),
 );
+undef $sortex;
 open SORTFILE, "sortfile.txt" or die "Couldn't open file 'sortfile.txt': $!";
 $sort_output = [<SORTFILE>];
+close SORTFILE;
 is_deeply( $sort_output, \@letters,
     "... to an outfile with an absurdly low" . "mem_threshold" );
-undef $sortex;
-unlink "sortfile.txt" or warn "Couldn't unlink file 'sortfile.txt': $!";
+maybe_remove('sortfile2.txt');
 
 $sortex = Sort::External->new;
 $sortex->finish;
@@ -92,6 +108,15 @@ undef $sort_output;
 $sort_output = $sortex->fetch;
 is( $sort_output, undef, "Sorting nothing returns nothing" );
 undef $sortex;
+
+{
+    local $Sort::External::MAX_RUNS = 2;
+    $sortex = MySortEx->new( cache_size => 1 );
+    $sort_output = reverse_letter_test($sortex);
+    is_deeply( $sort_output, \@letters, "consolidate" );
+    cmp_ok( $called, '>', 1, "recursive consolidation" );
+    undef $sortex;
+}
 
 sub reverse_letter_test {
     my $sortex_object = shift;
@@ -103,3 +128,10 @@ sub reverse_letter_test {
     }
     return \@sorted;
 }
+
+sub maybe_remove {
+    my $filepath = shift;
+    return unless -e $filepath;
+    unlink $filepath or die "Can't unlink '$filepath': $!";
+}
+

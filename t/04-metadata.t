@@ -10,6 +10,11 @@ use Sort::External;
 
 my ( $sortex, $item, @sorted );
 
+# We supply curdir as a working_dir instead of allowing the default because
+# File::Spec->tmpdir, used by the File::Temp constructor, returns different
+# values under perl -T.  
+my $curdir = File::Spec->curdir;
+
 my @orig = 'a' .. 'y';
 
 my $valid_utf8 = "z\xf0\x9d\x84\x9e";
@@ -18,7 +23,7 @@ push @orig, $valid_utf8;
 
 my @reversed = reverse @orig;
 
-$sortex = Sort::External->new( cache_size => 5 );
+$sortex = Sort::External->new( cache_size => 5, working_dir => $curdir );
 $sortex->feed($_) for @reversed;
 $sortex->finish;
 while ( defined( $item = $sortex->fetch ) ) {
@@ -27,7 +32,6 @@ while ( defined( $item = $sortex->fetch ) ) {
 is_deeply( \@sorted, \@orig, "UTF-8 flag gets preserved" );
 @sorted = ();
 
-my $curdir = File::Spec->curdir;
 opendir( CURDIR, $curdir ) or die "couldn't opendir '$curdir': $!";
 my @tainted = readdir CURDIR;
 closedir CURDIR;
@@ -36,8 +40,8 @@ ok( is_tainted( $tainted[0] ), "test the test" );
 @orig = sort( @orig, @tainted );
 @reversed = reverse @orig;
 
-$sortex = Sort::External->new( cache_size => 5 );
-$sortex = Sort::External->new;
+$sortex = Sort::External->new( cache_size => 5, working_dir => $curdir );
+$sortex = Sort::External->new( working_dir => $curdir );
 $sortex->feed($_) for @reversed;
 $sortex->finish;
 while ( defined( $item = $sortex->fetch ) ) {

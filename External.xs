@@ -7,6 +7,13 @@
 #define SORTEX_UTF8_FLAG    0x1
 #define SORTEX_TAINTED_FLAG 0x2
 
+/* Memory requirement for a basic string SV.  The total cost for the SV is 
+ * SvLEN(sv) + OVERHEAD.  For SVs which hold more than strings, the overhead
+ * will be more, but it's too fiddly, slow, and error-prone to attempt an
+ * accurate count.
+ */
+#define OVERHEAD (sizeof(SV) + sizeof(struct xpv))
+
 typedef struct SortExternal {
     SV     *sortsub;
     SV     *working_dir;
@@ -88,9 +95,8 @@ SortExRun_destroy(SortExRun *self)
  * compressed integer.
  */
 void
-SortEx_print_to_sortfile(SortExternal *self, AV *input_av)
+SortEx_print_to_sortfile(SortExternal *self, AV *input_av, PerlIO *fh)
 {
-    PerlIO *const fh = self->fh;
     int i, max;
     
     for (i = 0, max = av_len(input_av); i <= max; i++) {
@@ -237,7 +243,7 @@ PPCODE:
     AV *const item_cache = self->item_cache;
     I32 start    = av_len(item_cache) + 1;
     I32 new_size = start + items - 1;
-    IV  space    = 15 * (items - 1);
+    IV  space    = (OVERHEAD + sizeof(SV*)) * (items - 1);
     I32 i;
     int need_to_flush = 0;
 
@@ -313,6 +319,7 @@ ALIAS:
     _get_item_cache    = 2
     _get_runs          = 3
     _get_tempfile_fh   = 4
+    _get_working_dir   = 5
 CODE:
 {
     switch(ix) {
@@ -328,6 +335,9 @@ CODE:
                 break;
 
         case 4: RETVAL = newSVsv(self->tempfile_fh);
+                break;
+
+        case 5: RETVAL = newSVsv(self->working_dir);
                 break;
 
         default:
@@ -351,11 +361,21 @@ PPCODE:
     self->fetch_tick = fetch_tick;
 
 void
-_print_to_sortfile(self, input_av)
+_set_temp_fh(self, tempfile_fh)
+    SortExternal *self;
+    SV *tempfile_fh;
+PPCODE:
+    SvREFCNT_dec(self->tempfile_fh);
+    self->tempfile_fh   = newSVsv(tempfile_fh);
+    self->fh            = IoIFP( sv_2io(tempfile_fh) );
+
+void
+_print_to_sortfile(self, input_av, fh)
     SortExternal *self;
     AV *input_av;
+    PerlIO *fh;
 PPCODE:
-    SortEx_print_to_sortfile(self, input_av);
+    SortEx_print_to_sortfile(self, input_av, fh);
 
 void
 _utf8_on(sv)

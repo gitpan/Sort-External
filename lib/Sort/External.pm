@@ -4,7 +4,7 @@ use warnings;
 
 use 5.006_001;
 
-our $VERSION = '0.171';
+our $VERSION = '0.18';
 
 use XSLoader;
 XSLoader::load( 'Sort::External', $VERSION );
@@ -17,9 +17,13 @@ our %instance_vars = (
     sortsub        => undef,
     working_dir    => undef,
     cache_size     => 0,
-    mem_threshold  => 2**20,
-    line_separator => undef,    # no-op, backwards compatibility only
+    mem_threshold  => 1024**2 * 8,
+    line_separator => undef,         # no-op, backwards compatibility only
 );
+
+# Maximum number of runs that SortEx object is allowed without triggering
+# multi-level consolidation at finish().
+our $MAX_RUNS = 30;
 
 sub new {
     my $class = shift;
@@ -58,14 +62,20 @@ my %finish_defaults = (
 
 sub finish {
     my $self = shift;
+    my $runs = $self->_get_runs;
 
     # If we've never flushed the cache, perform the final sort in-memory.
-    if ( !@{ $self->_get_runs } ) {
+    if ( !@$runs ) {
         my $item_cache = $self->_get_item_cache;
-        @$item_cache = $self->_sort(@$item_cache);
+        my $sortsub    = $self->_get_sortsub;
+        @$item_cache
+            = $sortsub ? sort $sortsub @$item_cache : sort @$item_cache;
     }
     else {
         $self->_write_item_cache_to_tempfile;
+        while ( @$runs > $MAX_RUNS ) { 
+            $self->_consolidate;
+        }
     }
 
     # If called with arguments, we must be printing everything to an outfile.
@@ -82,17 +92,50 @@ sub finish {
         }
 
         # Get an outfile and print everything to it.
-        my $item_cache = $self->_get_item_cache;
         croak('Argument outfile is required') unless defined $args{outfile};
-        sysopen( OUTFILE, $args{outfile}, $args{flags} )
+        sysopen( my $out_fh, $args{outfile}, $args{flags} )
             or croak("Couldn't open outfile '$args{outfile}': $!");
-        do {
-            print OUTFILE for @$item_cache;
-            @$item_cache = ();
-            $self->_gatekeeper; # Refreshes @$item_cache.
-        } while (@$item_cache);
-        close OUTFILE or croak("Couldn't close '$args{outfile}': $!");
+        $self->_finish_to_filehandle($out_fh);
+        close $out_fh or croak("Couldn't close '$args{outfile}': $!");
     }
+}
+
+sub _finish_to_filehandle {
+    my ( $self, $fh ) = @_;
+    my $item_cache = $self->_get_item_cache;
+    do {
+        print $fh $_ for @$item_cache;
+        @$item_cache = ();
+        $self->_gatekeeper; # Refreshes @$item_cache.
+    } while (@$item_cache);
+}
+
+sub _consolidate {
+    my $self = shift;
+    my $item_cache = $self->_get_item_cache;
+    my $runs = $self->_get_runs;
+    my $fh   = File::Temp->new(
+        DIR    => $self->_get_working_dir,
+        UNLINK => 1,
+    );
+    my @to_consolidate = @$runs;
+    @$runs = ();
+    my @consolidated;
+    while (@to_consolidate) {
+        my $num_to_splice = @to_consolidate < 10 ? @to_consolidate : 10;
+        push @$runs, splice( @to_consolidate, 0, 10 );
+        my $start = tell $fh;
+        do {
+            $self->_print_to_sortfile( $item_cache, $fh );
+            @$item_cache = ();
+            $self->_gatekeeper;    # Refreshes @$item_cache.
+        } while (@$item_cache);
+        my $run = Sort::External::SortExRun->_new( $fh, $start, tell($fh) );
+        push @consolidated, $run;
+        @$runs = ();
+    }
+    @$runs = @consolidated;
+    $self->_set_temp_fh($fh);
 }
 
 # Reload the main cache using elements from the individual run caches.
@@ -106,9 +149,10 @@ sub _gatekeeper {
     my $self       = shift;
     my $runs       = $self->_get_runs;
     my $item_cache = $self->_get_item_cache;
+    my $sortsub    = $self->_get_sortsub;
 
     # Discard exhausted runs.
-    @$runs = grep { @{ $_->_get_buffarray } or $_->_refill_buffer } @$runs;
+    @$runs = grep { $#{ $_->_get_buffarray } != -1 or $_->_refill_buffer } @$runs;
 
     if ( @$runs == 0 ) {
         @$item_cache = ();
@@ -124,7 +168,10 @@ sub _gatekeeper {
         # Choose the cutoff from among the lowest elements present in each 
         # run's cache.
         my @on_the_bubble = map { $_->_get_buffarray->[-1] } @$runs;
-        @on_the_bubble = $self->_sort(@on_the_bubble);
+        @on_the_bubble
+            = $sortsub
+            ? sort $sortsub @on_the_bubble
+            : sort @on_the_bubble;
         my $cutoff = $on_the_bubble[0];
 
         # Let all qualified items into the out_batch.
@@ -138,24 +185,11 @@ sub _gatekeeper {
         }
 
         # Refresh the item cache and prepare to return elements.
-        @$item_cache = $self->_sort(@out_batch);
+        @$item_cache = $sortsub ? sort $sortsub @out_batch : sort @out_batch;
     }
 
     $self->_set_fetch_tick(0);
     return;
-}
-
-# Sort arguments using either the default lexical sort or the sortsub provided
-# to the object's constructor.
-sub _sort {
-    my $self = shift;
-    my $sortsub = $self->_get_sortsub;
-    if ( defined $sortsub ) {
-        return sort $sortsub @_;
-    }
-    else {
-        return sort @_;
-    }
 }
 
 # Compare two elements using either standard lexical comparison or the sortsub
@@ -182,10 +216,10 @@ sub _write_item_cache_to_tempfile {
     return unless @$item_cache;
 
     # Print the sorted cache to the tempfile.
-    @$item_cache = $self->_sort(@$item_cache);
+    @$item_cache = $sortsub ? sort $sortsub @$item_cache : sort @$item_cache;
     my $tempfile_fh = $self->_get_tempfile_fh;
     my $start       = tell($tempfile_fh);
-    $self->_print_to_sortfile($item_cache);
+    $self->_print_to_sortfile( $item_cache, $tempfile_fh );
 
     # Add a SortExRun object to the runs array.
     my $run = Sort::External::SortExRun->_new( $tempfile_fh, $start,
@@ -235,7 +269,7 @@ Sort::External - Sort huge lists.
 
 =head1 SYNOPSIS
 
-    my $sortex = Sort::External->new( mem_threshold => 2**24 );
+    my $sortex = Sort::External->new( mem_threshold => 1024**2 * 16 );
     while (<HUGEFILE>) {
         $sortex->feed($_);
     }
@@ -282,7 +316,7 @@ item's taint and UTF-8 flags through the journey to disk and back.
 
     my $sortscheme = sub { $Sort::External::b <=> $Sort::External::a };
     my $sortex = Sort::External->new(
-        mem_threshold   => 2**24,            # default: 2**20 (1Mb)
+        mem_threshold   => 1024**2 * 16,     # default: 1024**2 * 8 (8 MiB)
         cache_size      => 100_000,          # default: undef (disabled) 
         sortsub         => $sortscheme,      # default sort: standard lexical
         working_dir     => $temp_directory,  # default: see below
@@ -296,8 +330,7 @@ Construct a Sort::External object.
 
 B<mem_threshold> - Allow the input cache to consume approximately
 C<mem_threshold> bytes before sorting it and flushing to disk.  Experience
-suggests that the optimum setting is somewhere between 2**20 and 2**24:
-1-16Mb.
+suggests that the optimum setting is somewhere in the range of 1-16 MiB.
 
 =item 
 
